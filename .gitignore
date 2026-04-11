@@ -1,0 +1,61 @@
+# Claude
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+eggs/
+*.egg
+.eggs/
+
+# Virtual environments
+venv/
+env/
+.env
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment variables
+.env
+.env.local
+*.env
+
+# API Keys
+secrets/
+credentials/
+
+# Data files (large)
+data/raw/
+*.csv
+*.h5
+*.pkl
+
+# Logs
+logs/
+*.log
+
+# Docker
+docker-compose.override.yml
+
+# Model artifacts
+models/saved/
+*.pt
+*.pth
+*.onnx
