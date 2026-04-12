@@ -1,0 +1,79 @@
+{
+  "last_updated": "2026-04-12T20:11:12.790335+00:00",
+  "cycle": 3,
+  "mode": "paper",
+  "portfolio": {
+    "balance_usdt": 17705.95,
+    "equity": 17705.95,
+    "return_pct": 77.06,
+    "open_positions": 0,
+    "unrealized_pnl": 0,
+    "positions": []
+  },
+  "pnl_summary": {
+    "total_trades": 6,
+    "closed_trades": 0,
+    "open_trades": 6,
+    "total_pnl": 0,
+    "win_rate_pct": 0.0,
+    "avg_win": 0,
+    "avg_loss": 0,
+    "profit_factor": 0,
+    "best_trade": 0,
+    "worst_trade": 0
+  },
+  "last_signals": {
+    "BTC/USDT": {
+      "signal": "SELL",
+      "confidence": 0.45,
+      "buy_score": 0.25,
+      "sell_score": 0.45,
+      "reasons": [
+        "BB overbought (1.34)",
+        "Stoch overbought (K=85)"
+      ],
+      "indicators": {
+        "rsi": 67.99,
+        "macd_hist": 25.0359,
+        "bb_pct": 1.3386,
+        "stoch_k": 85.3,
+        "adx": 21.3
+      },
+      "symbol": "BTC/USDT",
+      "price": 71005.32,
+      "timestamp": "2026-04-12T20:11:11.730617+00:00",
+      "trade": {
+        "order_id": "27ab683d-0f9",
+        "filled": 0.020622395934654664,
+        "price": 70969.81734000001,
+        "fee": 1.4635676725956002
+      }
+    },
+    "ETH/USDT": {
+      "signal": "SELL",
+      "confidence": 0.45,
+      "buy_score": 0.25,
+      "sell_score": 0.45,
+      "reasons": [
+        "RSI overbought (77.9)",
+        "BB overbought (1.44)"
+      ],
+      "indicators": {
+        "rsi": 77.89,
+        "macd_hist": 3.8376,
+        "bb_pct": 1.4361,
+        "stoch_k": 92.6,
+        "adx": 37.3
+      },
+      "symbol": "ETH/USDT",
+      "price": 2194.81,
+      "timestamp": "2026-04-12T20:11:12.301431+00:00",
+      "trade": {
+        "order_id": "21738acf-921",
+        "filled": 0.7337208837793842,
+        "price": 2193.992455,
+        "fee": 1.6097780830879007
+      }
+    }
+  }
+}
