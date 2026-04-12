@@ -1,18 +1,29 @@
 {
-  "cycle": 3,
-  "timestamp": "2026-04-12T20:11:12.790693+00:00",
+  "cycle": 5,
+  "timestamp": "2026-04-12T22:44:33.614888+00:00",
   "portfolio": {
-    "balance_usdt": 17705.95,
-    "equity": 17705.95,
-    "return_pct": 77.06,
+    "balance_usdt": 10000.0,
+    "equity": 10000.0,
+    "return_pct": 0.0,
     "open_positions": 0,
     "unrealized_pnl": 0,
+    "safety_status": {
+      "halted": false,
+      "halt_reason": "",
+      "daily_fees": 0.0,
+      "daily_fee_cap": 50.0,
+      "daily_trades": 0,
+      "hourly_trades": 0,
+      "consecutive_losses": 0,
+      "peak_equity": 10000.0,
+      "last_trade_times": {}
+    },
     "positions": []
   },
   "pnl": {
-    "total_trades": 6,
+    "total_trades": 0,
     "closed_trades": 0,
-    "open_trades": 6,
+    "open_trades": 0,
     "total_pnl": 0,
     "win_rate_pct": 0.0,
     "avg_win": 0,
@@ -23,56 +34,14 @@
   },
   "signals": {
     "BTC/USDT": {
-      "signal": "SELL",
-      "confidence": 0.45,
-      "buy_score": 0.25,
-      "sell_score": 0.45,
-      "reasons": [
-        "BB overbought (1.34)",
-        "Stoch overbought (K=85)"
-      ],
-      "indicators": {
-        "rsi": 67.99,
-        "macd_hist": 25.0359,
-        "bb_pct": 1.3386,
-        "stoch_k": 85.3,
-        "adx": 21.3
-      },
       "symbol": "BTC/USDT",
-      "price": 71005.32,
-      "timestamp": "2026-04-12T20:11:11.730617+00:00",
-      "trade": {
-        "order_id": "27ab683d-0f9",
-        "filled": 0.020622395934654664,
-        "price": 70969.81734000001,
-        "fee": 1.4635676725956002
-      }
+      "signal": "PAUSED",
+      "reason": "circuit breaker open"
     },
     "ETH/USDT": {
-      "signal": "SELL",
-      "confidence": 0.45,
-      "buy_score": 0.25,
-      "sell_score": 0.45,
-      "reasons": [
-        "RSI overbought (77.9)",
-        "BB overbought (1.44)"
-      ],
-      "indicators": {
-        "rsi": 77.89,
-        "macd_hist": 3.8376,
-        "bb_pct": 1.4361,
-        "stoch_k": 92.6,
-        "adx": 37.3
-      },
       "symbol": "ETH/USDT",
-      "price": 2194.81,
-      "timestamp": "2026-04-12T20:11:12.301431+00:00",
-      "trade": {
-        "order_id": "21738acf-921",
-        "filled": 0.7337208837793842,
-        "price": 2193.992455,
-        "fee": 1.6097780830879007
-      }
+      "signal": "PAUSED",
+      "reason": "circuit breaker open"
     }
   }
 }
