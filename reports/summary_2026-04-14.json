@@ -1,7 +1,6 @@
 {
-  "last_updated": "2026-04-14T02:55:21.467277+00:00",
   "cycle": 5,
-  "mode": "paper",
+  "timestamp": "2026-04-14T02:55:21.467543+00:00",
   "portfolio": {
     "balance_usdt": 10000.0,
     "equity": 10000.0,
@@ -21,7 +20,7 @@
     },
     "positions": []
   },
-  "pnl_summary": {
+  "pnl": {
     "total_trades": 0,
     "closed_trades": 0,
     "open_trades": 0,
@@ -33,7 +32,7 @@
     "best_trade": 0,
     "worst_trade": 0
   },
-  "last_signals": {
+  "signals": {
     "BTC/USDT": {
       "symbol": "BTC/USDT",
       "signal": "PAUSED",
