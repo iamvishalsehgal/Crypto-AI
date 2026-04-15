@@ -7,14 +7,12 @@ Runs the trading pipeline in a continuous loop with:
 - Retry/reconnection on exchange failures
 - Circuit breaker: halts on repeated errors or drawdown limits
 - Full P&L tracking with entry/exit matching
-- Auto-commit to GitHub on a configurable interval
 - --test mode for fast dry-run validation
 
 Usage:
     python scripts/auto_trader.py                         # Run forever (paper)
     python scripts/auto_trader.py --test                  # Quick 3-cycle test
     python scripts/auto_trader.py --cycles 50             # Run 50 cycles
-    python scripts/auto_trader.py --commit-interval 30    # Commit every 30 min
 """
 
 from __future__ import annotations
@@ -23,7 +21,6 @@ import argparse
 import csv
 import json
 import os
-import subprocess
 import sys
 import time
 import traceback
@@ -224,44 +221,6 @@ class PnLTracker:
 
 
 # =====================================================================
-# Git helpers
-# =====================================================================
-
-def git_run(*args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=30,
-    )
-    return result.stdout.strip()
-
-
-def auto_commit_and_push() -> bool:
-    try:
-        git_run("add", "reports/")
-        status = git_run("status", "--porcelain", "reports/")
-        if not status:
-            logger.info("No new report changes to commit")
-            return False
-
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        msg = f"bot: trading report — {now}"
-        git_run("commit", "-m", msg)
-        push = subprocess.run(
-            ["git", "push", "origin", "master"],
-            capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=60,
-        )
-        if push.returncode == 0:
-            logger.info("Pushed report update to GitHub")
-            return True
-        else:
-            logger.warning("Push failed: %s", push.stderr.strip())
-            return False
-    except Exception as exc:
-        logger.error("Git commit/push error: %s", exc)
-        return False
-
-
-# =====================================================================
 # Report writers
 # =====================================================================
 
@@ -307,8 +266,64 @@ def write_status_file(cycle: int, portfolio: dict, signals: dict, pnl: dict) -> 
 # Signal generator
 # =====================================================================
 
+SIGNAL_CONFIG_PATH = PROJECT_ROOT / "config" / "signal_config.json"
+
+# Default signal parameters — auto-tuner can override these via signal_config.json
+DEFAULT_SIGNAL_PARAMS = {
+    # RSI thresholds
+    "rsi_oversold": 30,
+    "rsi_weak_buy": 40,
+    "rsi_overbought": 70,
+    "rsi_weak_sell": 60,
+    # RSI weights
+    "rsi_strong_weight": 0.25,
+    "rsi_weak_weight": 0.10,
+    # MACD weights
+    "macd_crossover_weight": 0.20,
+    "macd_trend_weight": 0.10,
+    # Bollinger Band thresholds
+    "bb_buy_strong": 0.15,
+    "bb_buy_weak": 0.30,
+    "bb_sell_strong": 0.85,
+    "bb_sell_weak": 0.70,
+    "bb_strong_weight": 0.20,
+    "bb_weak_weight": 0.08,
+    # Stochastic thresholds
+    "stoch_oversold": 20,
+    "stoch_overbought": 80,
+    "stoch_weight": 0.15,
+    # EMA weight
+    "ema_weight": 0.15,
+    # ADX filter
+    "adx_weak_threshold": 20,
+    "adx_dampen_factor": 0.5,
+    # Decision threshold
+    "min_confidence": 0.45,
+    # Position sizing (fraction of balance)
+    "position_size_pct": 0.10,
+}
+
+
+def load_signal_params() -> dict:
+    """Load signal parameters from config file, falling back to defaults."""
+    params = DEFAULT_SIGNAL_PARAMS.copy()
+    if SIGNAL_CONFIG_PATH.exists():
+        try:
+            with open(SIGNAL_CONFIG_PATH) as f:
+                overrides = json.load(f)
+            params.update(overrides)
+            logger.info("Loaded signal config from %s", SIGNAL_CONFIG_PATH)
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Failed to load signal config: %s — using defaults", exc)
+    return params
+
+
 class SignalGenerator:
     """Multi-indicator confluence signal using REAL column names from TechnicalFeatures.
+
+    Parameters are loaded from config/signal_config.json if it exists,
+    otherwise defaults are used. The auto-tuner can write improved
+    parameters to that file.
 
     Columns used (from crypto_bot.features.technical):
       rsi, macd, macd_signal, macd_histogram,
@@ -317,9 +332,12 @@ class SignalGenerator:
       ema_9, ema_21, ema_50, ema_200
     """
 
-    @staticmethod
-    def generate(features_row: dict, prev_row: Optional[dict] = None) -> dict:
+    def __init__(self, params: Optional[dict] = None) -> None:
+        self.p = params if params is not None else load_signal_params()
+
+    def generate(self, features_row: dict, prev_row: Optional[dict] = None) -> dict:
         """Score a single row of features and return a signal dict."""
+        p = self.p
 
         rsi = features_row.get("rsi")
         macd = features_row.get("macd")
@@ -345,74 +363,75 @@ class SignalGenerator:
 
         # 1. RSI
         if ok(rsi):
-            if rsi < 30:
-                buy_score += 0.25
+            if rsi < p["rsi_oversold"]:
+                buy_score += p["rsi_strong_weight"]
                 reasons_buy.append(f"RSI oversold ({rsi:.1f})")
-            elif rsi < 40:
-                buy_score += 0.10
-            elif rsi > 70:
-                sell_score += 0.25
+            elif rsi < p["rsi_weak_buy"]:
+                buy_score += p["rsi_weak_weight"]
+            elif rsi > p["rsi_overbought"]:
+                sell_score += p["rsi_strong_weight"]
                 reasons_sell.append(f"RSI overbought ({rsi:.1f})")
-            elif rsi > 60:
-                sell_score += 0.10
+            elif rsi > p["rsi_weak_sell"]:
+                sell_score += p["rsi_weak_weight"]
 
         # 2. MACD histogram direction + crossover
         if ok(macd, macd_sig, macd_hist):
             if macd_hist > 0 and macd < 0:
-                buy_score += 0.20
+                buy_score += p["macd_crossover_weight"]
                 reasons_buy.append("MACD bullish crossover")
             elif macd_hist > 0:
-                buy_score += 0.10
+                buy_score += p["macd_trend_weight"]
             if macd_hist < 0 and macd > 0:
-                sell_score += 0.20
+                sell_score += p["macd_crossover_weight"]
                 reasons_sell.append("MACD bearish crossover")
             elif macd_hist < 0:
-                sell_score += 0.10
+                sell_score += p["macd_trend_weight"]
 
         # 3. Bollinger %B
         if ok(bb_pct):
-            if bb_pct < 0.15:
-                buy_score += 0.20
+            if bb_pct < p["bb_buy_strong"]:
+                buy_score += p["bb_strong_weight"]
                 reasons_buy.append(f"BB squeeze low ({bb_pct:.2f})")
-            elif bb_pct < 0.30:
-                buy_score += 0.08
-            if bb_pct > 0.85:
-                sell_score += 0.20
+            elif bb_pct < p["bb_buy_weak"]:
+                buy_score += p["bb_weak_weight"]
+            if bb_pct > p["bb_sell_strong"]:
+                sell_score += p["bb_strong_weight"]
                 reasons_sell.append(f"BB overbought ({bb_pct:.2f})")
-            elif bb_pct > 0.70:
-                sell_score += 0.08
+            elif bb_pct > p["bb_sell_weak"]:
+                sell_score += p["bb_weak_weight"]
 
         # 4. Stochastic
         if ok(stoch_k, stoch_d):
-            if stoch_k < 20 and stoch_d < 20:
-                buy_score += 0.15
+            if stoch_k < p["stoch_oversold"] and stoch_d < p["stoch_oversold"]:
+                buy_score += p["stoch_weight"]
                 reasons_buy.append(f"Stoch oversold (K={stoch_k:.0f})")
-            if stoch_k > 80 and stoch_d > 80:
-                sell_score += 0.15
+            if stoch_k > p["stoch_overbought"] and stoch_d > p["stoch_overbought"]:
+                sell_score += p["stoch_weight"]
                 reasons_sell.append(f"Stoch overbought (K={stoch_k:.0f})")
 
         # 5. EMA trend alignment
         if ok(ema_9, ema_21, ema_50, close):
             if close > ema_9 > ema_21 > ema_50:
-                buy_score += 0.15
+                buy_score += p["ema_weight"]
                 reasons_buy.append("EMAs bullish aligned")
             elif close < ema_9 < ema_21 < ema_50:
-                sell_score += 0.15
+                sell_score += p["ema_weight"]
                 reasons_sell.append("EMAs bearish aligned")
 
         # 6. ADX trend strength filter — only trade in strong trends
         if ok(adx):
-            if adx < 20:
+            if adx < p["adx_weak_threshold"]:
                 # Weak trend, dampen signals
-                buy_score *= 0.5
-                sell_score *= 0.5
+                buy_score *= p["adx_dampen_factor"]
+                sell_score *= p["adx_dampen_factor"]
 
         # ── Decision ──
+        min_conf = p["min_confidence"]
         confidence = max(buy_score, sell_score)
-        if buy_score >= 0.45 and buy_score > sell_score:
+        if buy_score >= min_conf and buy_score > sell_score:
             signal = "BUY"
             reasons = reasons_buy
-        elif sell_score >= 0.45 and sell_score > buy_score:
+        elif sell_score >= min_conf and sell_score > buy_score:
             signal = "SELL"
             reasons = reasons_sell
         else:
@@ -662,8 +681,6 @@ def main() -> None:
                         help="Max cycles (0 = infinite)")
     parser.add_argument("--interval", type=int, default=60,
                         help="Seconds between cycles")
-    parser.add_argument("--commit-interval", type=int, default=60,
-                        help="Minutes between auto-commits to GitHub")
     parser.add_argument("--symbols", nargs="+", default=None,
                         help="Override trading symbols")
     args = parser.parse_args()
@@ -672,7 +689,6 @@ def main() -> None:
     if args.test:
         args.cycles = 3
         args.interval = 10
-        args.commit_interval = 9999  # don't push during test
 
     ensure_dirs()
     symbols = args.symbols or settings.exchange.supported_symbols
@@ -680,12 +696,11 @@ def main() -> None:
     logger.info("=" * 60)
     logger.info("  AUTONOMOUS TRADER%s", " (TEST MODE)" if args.test else "")
     logger.info("  Symbols : %s", ", ".join(symbols))
-    logger.info("  Interval: %ds | Commit: every %dm", args.interval, args.commit_interval)
+    logger.info("  Interval: %ds", args.interval)
     logger.info("  Mode    : PAPER (sandbox)")
     logger.info("=" * 60)
 
     trader = AutoTrader()
-    last_commit = time.time()
     cycle = 0
     errors_this_session = 0
 
@@ -748,13 +763,6 @@ def main() -> None:
                 "signals": signals,
             })
 
-            # Auto-commit
-            elapsed_min = (time.time() - last_commit) / 60
-            if elapsed_min >= args.commit_interval:
-                logger.info("Auto-committing reports to GitHub...")
-                auto_commit_and_push()
-                last_commit = time.time()
-
             # Cycle timing
             cycle_duration = time.time() - cycle_start
             sleep_time = max(0, args.interval - cycle_duration)
@@ -776,10 +784,6 @@ def main() -> None:
     logger.info("  Best     : $%.2f | Worst: $%.2f", final["best_trade"], final["worst_trade"])
     logger.info("  Errors   : %d", errors_this_session)
     logger.info("=" * 60)
-
-    if not args.test:
-        logger.info("Final commit...")
-        auto_commit_and_push()
 
     logger.info("Autonomous trader stopped.")
 
