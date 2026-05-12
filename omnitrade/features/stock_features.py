@@ -46,20 +46,20 @@ class StockFundamentalFeatures:
                 return np.nan
 
         features: Dict[str, float] = {
-            "pe_ratio": _safe(fundamentals.get("pe_ratio", np.nan)),
-            "forward_pe": _safe(fundamentals.get("forward_pe", np.nan)),
-            "pb_ratio": _safe(fundamentals.get("pb_ratio", np.nan)),
-            "log_market_cap": np.log(_safe(fundamentals.get("market_cap", 1))),
-            "eps": _safe(fundamentals.get("eps", np.nan)),
-            "dividend_yield": _safe(fundamentals.get("dividend_yield", 0)) or 0.0,
-            "debt_to_equity": _safe(fundamentals.get("debt_to_equity", np.nan)),
-            "roe": _safe(fundamentals.get("roe", np.nan)),
-            "revenue_growth": _safe(fundamentals.get("revenue_growth", np.nan)),
-            "profit_margins": _safe(fundamentals.get("profit_margins", np.nan)),
-            "beta": _safe(fundamentals.get("beta", 1.0)) or 1.0,
-            "short_ratio": _safe(fundamentals.get("short_ratio", np.nan)),
-            "fifty_day_avg": _safe(fundamentals.get("fifty_day_avg", np.nan)),
-            "two_hundred_day_avg": _safe(fundamentals.get("two_hundred_day_avg", np.nan)),
+            "pe_ratio": _safe(fundamentals.get("pe_ratio")),
+            "forward_pe": _safe(fundamentals.get("forward_pe")),
+            "pb_ratio": _safe(fundamentals.get("pb_ratio")),
+            "log_market_cap": np.log(max(_safe(fundamentals.get("market_cap")), 1.0)),
+            "eps": _safe(fundamentals.get("eps")),
+            "dividend_yield": _safe(fundamentals.get("dividend_yield")),
+            "debt_to_equity": _safe(fundamentals.get("debt_to_equity")),
+            "roe": _safe(fundamentals.get("roe")),
+            "revenue_growth": _safe(fundamentals.get("revenue_growth")),
+            "profit_margins": _safe(fundamentals.get("profit_margins")),
+            "beta": _safe(fundamentals.get("beta")),
+            "short_ratio": _safe(fundamentals.get("short_ratio")),
+            "fifty_day_avg": _safe(fundamentals.get("fifty_day_avg")),
+            "two_hundred_day_avg": _safe(fundamentals.get("two_hundred_day_avg")),
         }
 
         # Derived ratios
@@ -143,9 +143,10 @@ class StockFeaturePipeline:
 
             if not fund_df.empty and len(fund_df) == 1:
                 for col in fund_df.columns:
-                    tech_features[col] = fund_df[col].iloc[0]
+                    val = fund_df[col].iloc[0]
+                    tech_features[col] = val if not (isinstance(val, float) and np.isnan(val)) else 0.0
 
-        tech_features = tech_features.dropna()
+        tech_features = tech_features.ffill().bfill().fillna(0)
 
         logger.info(
             "Stock feature pipeline: %d rows x %d columns",

@@ -18,7 +18,7 @@ from pymongo.collection import Collection
 from pymongo.database import Database
 from pymongo.errors import ConnectionFailure, PyMongoError
 
-from omnitrade.config.settings import settings
+from omnitrade.config.settings import Settings, settings as _default_settings
 from omnitrade.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -46,18 +46,17 @@ class MongoDBStorage:
 
     def __init__(
         self,
-        uri: Optional[str] = None,
-        db_name: Optional[str] = None,
+        settings: Optional[Settings] = None,
     ) -> None:
         """
         Initialise the storage layer.
 
         Args:
-            uri: MongoDB connection string.  Falls back to ``settings.database.uri``.
-            db_name: Database name.  Falls back to ``settings.database.name``.
+            settings: Global project settings. Falls back to module singleton.
         """
-        self._uri = uri or settings.database.uri
-        self._db_name = db_name or settings.database.name
+        self._settings = settings or _default_settings
+        self._uri = self._settings.database.uri
+        self._db_name = self._settings.database.name
         self._client: Optional[MongoClient] = None
         self._db: Optional[Database] = None
 
@@ -79,8 +78,8 @@ class MongoDBStorage:
         logger.info("Connecting to MongoDB at %s ...", self._uri)
         self._client = MongoClient(
             self._uri,
-            serverSelectionTimeoutMS=settings.database.server_selection_timeout_ms,
-            connectTimeoutMS=settings.database.connection_timeout_ms,
+            serverSelectionTimeoutMS=self._settings.database.server_selection_timeout_ms,
+            connectTimeoutMS=self._settings.database.connection_timeout_ms,
         )
 
         # Verify connectivity.
