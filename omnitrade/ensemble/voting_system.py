@@ -186,13 +186,12 @@ class EnsembleVoter:
                 prediction = self._get_prediction(model, features)
                 individual_predictions[name] = prediction
                 self._failure_counts[name] = 0  # reset on success
-            except Exception:
+            except Exception as exc:
                 self._failure_counts[name] = self._failure_counts.get(name, 0) + 1
                 fails = self._failure_counts[name]
                 logger.error(
-                    "Model '%s' failed during prediction (consecutive: %d/%d); "
-                    "defaulting to HOLD",
-                    name, fails, self._max_consecutive_failures,
+                    "Model '%s' failed during prediction (consecutive: %d/%d): %s",
+                    name, fails, self._max_consecutive_failures, exc,
                 )
                 individual_predictions[name] = _HOLD
 
@@ -445,13 +444,23 @@ class EnsembleVoter:
             attribute.
         2.  ``model(features)`` -- if the model is callable.
         3.  Falls back to ``"HOLD"``.
+
+        When *features* is a dict wrapping a single DataFrame (e.g.
+        ``{"features": df}``), the DataFrame is extracted so scikit-learn-
+        compatible models receive it directly.
         """
         raw: Any
 
+        # Extract DataFrame from dict wrapper so tree models get matrix input.
+        if isinstance(features, dict) and "features" in features:
+            model_input = features["features"]
+        else:
+            model_input = features
+
         if hasattr(model, "predict") and callable(model.predict):
-            raw = model.predict(features)
+            raw = model.predict(model_input)
         elif callable(model):
-            raw = model(features)
+            raw = model(model_input)
         else:
             logger.warning(
                 "Model %r has no predict method and is not callable; "

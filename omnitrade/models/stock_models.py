@@ -77,10 +77,18 @@ class StockModelFactory:
         metrics: Dict[str, Any] = {}
         valid_models = 0
 
+        # Train/val split (chronological — no shuffle)
+        n = len(features)
+        split_idx = int(n * 0.80)
+        X_train = features.iloc[:split_idx]
+        y_train = labels.iloc[:split_idx] if hasattr(labels, "iloc") else labels[:split_idx]
+        X_val = features.iloc[split_idx:]
+        y_val = labels.iloc[split_idx:] if hasattr(labels, "iloc") else labels[split_idx:]
+
         if "xgboost" in self._models:
             try:
                 model = self._models["xgboost"]
-                model.fit(features, labels)
+                model.train(X_train, y_train, X_val, y_val)
                 acc = self._evaluate(model, features, labels)
                 metrics["xgboost"] = {"accuracy": acc}
                 valid_models += 1
@@ -92,7 +100,7 @@ class StockModelFactory:
         if "lstm" in self._models:
             try:
                 trainer = self._models["lstm"]
-                train_results = trainer.train(features, labels)
+                train_results = trainer.train(X_train, y_train, X_val, y_val)
                 metrics["lstm"] = train_results
                 valid_models += 1
                 logger.info("Stock LSTM trained")

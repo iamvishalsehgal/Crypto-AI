@@ -201,32 +201,47 @@ class LightGBMTrader:
     # ------------------------------------------------------------------
 
     def save_model(self, path: Union[str, Path]) -> None:
-        """Save model to *path* as a LightGBM text/JSON file."""
+        """Save model to *path* using joblib (full sklearn wrapper)."""
         self._check_fitted()
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._model.booster_.save_model(str(path))
+        import joblib
+        joblib.dump(self._model, str(path))
         logger.info("LightGBM model saved to %s", path)
 
     def load_model(self, path: Union[str, Path]) -> None:
-        """Load model from *path*."""
+        """Load model from *path* (joblib or LightGBM text format)."""
+        import joblib
+        import lightgbm as lgb
+        from sklearn.preprocessing import LabelEncoder
+
         path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"Model file not found: {path}")
 
-        # Re-initialise with a minimal booster and load.
-        self._model = LGBMClassifier(
-            n_estimators=1, verbose=-1, random_state=42,
-        )
-        self._model.booster_ = None
-        self._model = LGBMClassifier(verbose=-1, random_state=42)
-        self._model._Booster = None
-        # LightGBM sklearn API requires fit before load — create a dummy booster.
-        import lightgbm as lgb
-        self._model._Booster = lgb.Booster(model_file=str(path))
-        self._model._n_features = self._model._Booster.num_feature()
+        # Try joblib first (full sklearn wrapper), fall back to booster text file
+        try:
+            self._model = joblib.load(str(path))
+            self._is_fitted = True
+            logger.info("LightGBM model loaded from %s (joblib)", path)
+            return
+        except Exception:
+            logger.debug("Not a joblib file, trying booster text format")
+
+        booster = lgb.Booster(model_file=str(path))
+        self._model = LGBMClassifier(verbose=-1, random_state=42, n_jobs=-1)
+        self._model._Booster = booster
+        self._model._n_features = booster.num_feature()
+        self._model._n_features_in = booster.num_feature()
+        self._model._n_classes = 3
+        self._model._classes = np.array([0, 1, 2])
+        self._model._objective = "multiclass"
+        le = LabelEncoder()
+        le.classes_ = np.array([0, 1, 2])
+        self._model._le = le
+        self._model.fitted_ = True
         self._is_fitted = True
-        logger.info("LightGBM model loaded from %s", path)
+        logger.info("LightGBM model loaded from %s (booster text)", path)
 
     # ------------------------------------------------------------------
     # Internal helpers

@@ -202,7 +202,10 @@ class LSTMTrainer:
         if target_col not in data.columns:
             raise ValueError(f"Target column '{target_col}' not found in DataFrame.")
 
-        feature_cols = [c for c in data.columns if c != target_col]
+        feature_cols = [
+            c for c in data.columns
+            if c != target_col and pd.api.types.is_numeric_dtype(data[c])
+        ]
         features = data[feature_cols].values.astype(np.float32)
         targets = data[target_col].values.astype(np.int64)
 
@@ -287,7 +290,7 @@ class LSTMTrainer:
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode="min", factor=0.5, patience=max(1, patience // 3), verbose=False
+            optimizer, mode="min", factor=0.5, patience=max(1, patience // 3)
         )
 
         train_ds = TensorDataset(X_train, y_train)

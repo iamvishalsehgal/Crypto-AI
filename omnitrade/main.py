@@ -145,6 +145,11 @@ class TradingBot:
             from omnitrade.models.stock_models import StockModelFactory
             self.stock_models = StockModelFactory(self._settings)
 
+        # ---- Load trained models ----
+        self._crypto_xgb = None
+        self._crypto_lgb = None
+        self._load_saved_models()
+
         # ---- Monitoring ----
         from omnitrade.monitoring.telegram_bot import TelegramNotifier
         from omnitrade.monitoring.health_check import HealthChecker
@@ -159,6 +164,82 @@ class TradingBot:
         self.db.connect()
 
         logger.info("All components initialised — lanes: %s", self.router.get_status())
+
+    # ------------------------------------------------------------------
+    # Model loading
+    # ------------------------------------------------------------------
+
+    def _load_saved_models(self) -> None:
+        """Load trained models from disk for all enabled lanes."""
+        from pathlib import Path
+
+        project_root = Path(__file__).resolve().parent.parent
+        models_dir = project_root / "models" / "saved"
+
+        # ── Crypto models ──────────────────────────────────────────
+        if "crypto" in self._enabled_assets:
+            xgb_path = models_dir / "xgboost_model"
+            if xgb_path.exists():
+                try:
+                    from omnitrade.models.xgboost_model import XGBoostTrader
+                    self._crypto_xgb = XGBoostTrader(self._settings)
+                    self._crypto_xgb.load_model(str(xgb_path))
+                    self.ensemble.register_model("xgboost", self._crypto_xgb)
+                    logger.info("Loaded crypto XGBoost model from %s", xgb_path)
+                except Exception as exc:
+                    logger.warning("Failed to load crypto XGBoost: %s", exc)
+
+            lgb_path = models_dir / "lightgbm_model"
+            if lgb_path.exists():
+                try:
+                    from omnitrade.models.lightgbm_model import LightGBMTrader
+                    self._crypto_lgb = LightGBMTrader(self._settings)
+                    self._crypto_lgb.load_model(str(lgb_path))
+                    self.ensemble.register_model("lightgbm", self._crypto_lgb)
+                    logger.info("Loaded crypto LightGBM model from %s", lgb_path)
+                except Exception as exc:
+                    logger.warning("Failed to load crypto LightGBM: %s", exc)
+
+            # Load ensemble weights from config
+            weights_path = project_root / "config" / "ensemble_weights.json"
+            if weights_path.exists() and self._crypto_xgb is not None:
+                try:
+                    import json
+                    with open(weights_path) as f:
+                        config = json.load(f)
+                    for name, weight in config.get("weights", {}).items():
+                        if name in self.ensemble.get_model_weights():
+                            self.ensemble.update_weight(name, weight)
+                    logger.info("Loaded ensemble weights from config")
+                except Exception as exc:
+                    logger.warning("Failed to load ensemble weights: %s", exc)
+
+        # ── Stock models ──────────────────────────────────────────
+        if self.stock_models is not None:
+            try:
+                self.stock_models.create_all()
+                stock_xgb_path = models_dir / "stock_xgboost_model"
+                if stock_xgb_path.exists():
+                    self.stock_models._models["xgboost"].load_model(str(stock_xgb_path))
+                    logger.info("Loaded stock XGBoost model")
+                stock_lstm_path = models_dir / "stock_lstm_model"
+                if stock_lstm_path.exists():
+                    self.stock_models._models["lstm"].load_model(str(stock_lstm_path))
+                    logger.info("Loaded stock LSTM model")
+                self.stock_models._trained = True
+                logger.info("Stock models loaded from disk")
+            except Exception as exc:
+                logger.warning("Failed to load stock models: %s", exc)
+
+        # ── Betting model ─────────────────────────────────────────
+        if self.betting_model is not None:
+            bet_path = models_dir / "value_betting_model"
+            if bet_path.exists():
+                try:
+                    self.betting_model.load_model(str(bet_path))
+                    logger.info("Loaded betting model")
+                except Exception as exc:
+                    logger.warning("Failed to load betting model: %s", exc)
 
     # ------------------------------------------------------------------
     # Data collection
@@ -216,6 +297,16 @@ class TradingBot:
     # Signal generation
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _numeric_features(features: pd.DataFrame) -> pd.DataFrame:
+        """Return only numeric columns for model input (exclude timestamp, etc.)."""
+        exclude = {"signal", "timestamp"}
+        cols = [
+            c for c in features.columns
+            if c not in exclude and pd.api.types.is_numeric_dtype(features[c])
+        ]
+        return features[cols]
+
     def generate_signal(self, features: pd.DataFrame) -> Dict:
         """Run the ensemble to generate a trading signal.
 
@@ -230,7 +321,8 @@ class TradingBot:
             return self._fallback_signal(features)
 
         try:
-            vote = self.ensemble.vote({"features": features})
+            numeric_features = self._numeric_features(features)
+            vote = self.ensemble.vote({"features": numeric_features})
             return vote
         except Exception as exc:
             logger.error("Ensemble voting failed: %s, using fallback", exc)

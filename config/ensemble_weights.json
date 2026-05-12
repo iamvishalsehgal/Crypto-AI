@@ -1,0 +1,13 @@
+{
+  "weights": {
+    "xgboost": 0.6567,
+    "lightgbm": 0.6567,
+    "stock_ensemble": 0.1
+  },
+  "last_updated": "2026-05-12T19:24:58.183448+00:00",
+  "models": [
+    "xgboost",
+    "lightgbm",
+    "stock_ensemble"
+  ]
+}
