@@ -17,6 +17,10 @@ scipy>=1.10.0
 # --- Exchange & Market Data ---
 ccxt>=4.0.0
 
+# --- Stock Market Data & Trading ---
+yfinance>=0.2.0
+alpaca-py>=0.28.0
+
 # --- Database ---
 pymongo>=4.5.0
 
@@ -30,6 +34,10 @@ torchvision>=0.15.0
 
 # --- Reinforcement Learning ---
 gymnasium>=0.29.0
+stable-baselines3>=2.0.0
+
+# --- LightGBM ---
+lightgbm>=4.0.0
 
 # --- NLP / Sentiment ---
 transformers>=4.30.0

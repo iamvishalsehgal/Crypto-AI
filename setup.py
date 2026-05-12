@@ -1,11 +1,11 @@
-"""Package setup for the AI Crypto Trading Bot."""
+"""Package setup for OmniTrade AI — Multi-Asset Autonomous Trading System."""
 
 from setuptools import find_packages, setup
 
 setup(
-    name="crypto-ai-trading-bot",
-    version="0.1.0",
-    description="AI-powered cryptocurrency trading bot with ensemble models",
+    name="omnitrade-ai",
+    version="0.2.0",
+    description="AI-powered multi-asset autonomous trading system — crypto, stocks, betting",
     author="Vishal Sehgal",
     python_requires=">=3.10",
     packages=find_packages(),
@@ -28,6 +28,9 @@ setup(
         "matplotlib>=3.7.0",
         "prometheus-client>=0.17.0",
         "psutil>=5.9.0",
+        "yfinance>=0.2.0",
+        "alpaca-py>=0.28.0",
+        "requests>=2.31.0",
     ],
     extras_require={
         "dev": [
@@ -47,7 +50,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "crypto-bot=crypto_bot.main:main",
+            "omnitrade=omnitrade.main:main",
         ],
     },
 )

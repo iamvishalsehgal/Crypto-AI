@@ -22,13 +22,16 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import os
+import shutil
 import subprocess
 import sys
 import time
 import traceback
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -37,25 +40,62 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 os.chdir(PROJECT_ROOT)
 
-from crypto_bot.config.settings import settings
-from crypto_bot.utils.logger import get_logger
-from crypto_bot.data.collectors.market_data import MarketDataCollector
-from crypto_bot.features.technical import TechnicalFeatures
-from crypto_bot.risk.risk_manager import RiskManager
-from crypto_bot.risk.safety import SafetyGuard
-from crypto_bot.execution.trade_executor import TradeExecutor
+from omnitrade.config.settings import settings
+from omnitrade.config.asset_types import AssetType, UnifiedSignal
+from omnitrade.utils.logger import get_logger
+from omnitrade.data.collectors.market_data import MarketDataCollector
+from omnitrade.features.technical import TechnicalFeatures
+from omnitrade.risk.risk_manager import RiskManager
+from omnitrade.risk.safety import SafetyGuard
+from omnitrade.execution.trade_executor import TradeExecutor
+from omnitrade.execution.asset_router import AssetRouter
 
-logger = get_logger("crypto_bot.auto_trader")
+logger = get_logger("omnitrade.auto_trader")
 
 # ── Directories ──────────────────────────────────────────────────────
 REPORTS_DIR = PROJECT_ROOT / "reports"
 TRADES_DIR = PROJECT_ROOT / "reports" / "trades"
 LOGS_DIR = PROJECT_ROOT / "reports" / "logs"
+MODEL_META_PATH = PROJECT_ROOT / "reports" / "model_metadata.json"
+
+# Retraining intervals (in days)
+RETRAIN_INTERVALS = {
+    "crypto": 7,
+    "stock": 14,
+    "bet": 30,
+}
+
+# Disk space threshold (%), warn below this
+DISK_MIN_FREE_PCT = 10.0
+DISK_MIN_FREE_GB = 1.0
 
 
 def ensure_dirs() -> None:
     for d in [REPORTS_DIR, TRADES_DIR, LOGS_DIR]:
         d.mkdir(parents=True, exist_ok=True)
+
+
+def setup_log_rotation(log_path: Optional[Path] = None) -> None:
+    """Add a rotating file handler to the root logger.
+
+    Keeps 7 daily files of up to 50 MB each.
+    """
+    path = log_path or LOGS_DIR / "auto_trader.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    handler = RotatingFileHandler(
+        str(path), maxBytes=50 * 1024 * 1024, backupCount=7,
+    )
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    handler.setLevel(logging.INFO)
+
+    root_logger = logging.getLogger()
+    root_logger.addHandler(handler)
+
+    logger.info("Log rotation configured: %s (50 MB x 7)", path)
 
 
 # =====================================================================
@@ -310,7 +350,7 @@ def write_status_file(cycle: int, portfolio: dict, signals: dict, pnl: dict) -> 
 class SignalGenerator:
     """Multi-indicator confluence signal using REAL column names from TechnicalFeatures.
 
-    Columns used (from crypto_bot.features.technical):
+    Columns used (from omnitrade.features.technical):
       rsi, macd, macd_signal, macd_histogram,
       bb_percent_b, bb_bandwidth,
       stoch_k, stoch_d, adx, atr,
@@ -441,39 +481,231 @@ class SignalGenerator:
 # =====================================================================
 
 class AutoTrader:
-    def __init__(self) -> None:
-        self.market = MarketDataCollector(settings)
+    def __init__(self, asset_types: Optional[List[str]] = None) -> None:
+        self._asset_types = asset_types or settings.asset.enabled_assets
+        self.has_crypto = "crypto" in self._asset_types
+        self.has_stock = "stock" in self._asset_types
+        self.has_bet = "bet" in self._asset_types
+
+        self.market = MarketDataCollector(settings) if self.has_crypto else None
         self.tech = TechnicalFeatures(settings)
         self.risk = RiskManager(settings)
         self.safety = SafetyGuard(settings)
-        self.executor = TradeExecutor(risk_manager=self.risk, settings=settings)
+
+        # AssetRouter as central dispatcher
+        self.router = AssetRouter(settings=settings, risk_manager=self.risk, mode="paper")
+        self.executor = self.router.crypto_executor
+
+        # Stock components
+        self.stock_collector = None
+        self.stock_feature_pipeline = None
+        self.stock_models = None
+        if self.has_stock:
+            from omnitrade.data.collectors.stock_data import StockDataCollector
+            from omnitrade.features.stock_features import StockFeaturePipeline
+            from omnitrade.models.stock_models import StockModelFactory
+            self.stock_collector = StockDataCollector(settings)
+            self.stock_feature_pipeline = StockFeaturePipeline(settings)
+            self.stock_models = StockModelFactory(settings)
+
+        # Betting components
+        self.betting_collector = None
+        self.betting_features = None
+        self.betting_model = None
+        if self.has_bet:
+            from omnitrade.data.collectors.betting_data import BettingDataCollector
+            from omnitrade.features.betting_features import BettingFeatures
+            from omnitrade.models.betting_models import ValueBettingModel
+            self.betting_collector = BettingDataCollector(settings)
+            self.betting_features = BettingFeatures(settings)
+            self.betting_model = ValueBettingModel(settings)
+
         self.signal_gen = SignalGenerator()
-        self.pnl = PnLTracker(
-            initial_balance=self.executor.get_balance().get(
-                "USDT", {}
-            ).get("total", 10_000.0),
-        )
+        initial_equity = self.router.get_unified_balance().get("total_usd_equivalent", 10_000)
+        self.pnl = PnLTracker(initial_balance=initial_equity)
         self.circuit = CircuitBreaker(threshold=5, cooldown=300)
 
         # Reset daily counters
-        balance = self.executor.get_balance()
-        usdt = balance.get("USDT", {}).get("total", 10_000)
-        self.risk.reset_daily(usdt)
-        self.safety.update_equity_peak(usdt)
+        self.risk.reset_daily(initial_equity)
+        self.safety.update_equity_peak(initial_equity)
 
         logger.info(
-            "Safety config: reserve=%.0f%% | min_balance=$%.0f | "
-            "daily_fee_cap=$%.0f | max_trades/hr=%d | max_trades/day=%d | "
-            "cooldown=%ds | kill_on_%d_losses | kill_on_%.0f%%_drop",
+            "AutoTrader initialised — lanes: %s | Safety: reserve=%.0f%% "
+            "min_balance=$%.0f daily_fee_cap=$%.0f max_trades/hr=%d cooldown=%ds",
+            self._asset_types,
             settings.safety.reserve_balance_pct * 100,
             settings.safety.min_balance_to_trade,
             settings.safety.max_daily_fees,
             settings.safety.max_trades_per_hour,
-            settings.safety.max_trades_per_day,
             settings.safety.cooldown_after_trade_sec,
-            settings.safety.kill_on_consecutive_losses,
-            settings.safety.kill_on_equity_drop_pct * 100,
         )
+
+        # Load model metadata for retraining tracking
+        self._model_meta = self._load_model_meta()
+
+    # ------------------------------------------------------------------
+    # Model metadata & auto-retraining
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _load_model_meta() -> Dict[str, Any]:
+        """Load model metadata from disk, or return defaults."""
+        if MODEL_META_PATH.exists():
+            try:
+                with open(MODEL_META_PATH) as f:
+                    return json.load(f)
+            except Exception:
+                logger.warning("Corrupt model_metadata.json, resetting")
+        return {
+            "crypto_last_train": None,
+            "stock_last_train": None,
+            "bet_last_train": None,
+            "version": 1,
+        }
+
+    @staticmethod
+    def _save_model_meta(meta: Dict[str, Any]) -> None:
+        """Persist model metadata to disk."""
+        MODEL_META_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(MODEL_META_PATH, "w") as f:
+            json.dump(meta, f, indent=2, default=str)
+        logger.debug("Model metadata saved")
+
+    def _check_retraining_needed(self, lane: str) -> bool:
+        """Check if a lane's model needs retraining based on staleness.
+
+        Args:
+            lane: ``"crypto"``, ``"stock"``, or ``"bet"``.
+
+        Returns:
+            True if retraining should be triggered.
+        """
+        key = f"{lane}_last_train"
+        last_train = self._model_meta.get(key)
+        interval_days = RETRAIN_INTERVALS.get(lane, 14)
+
+        if last_train is None:
+            logger.info("%s model never trained — retraining needed", lane)
+            return True
+
+        try:
+            last_ts = datetime.fromisoformat(last_train)
+            days_since = (datetime.now(timezone.utc) - last_ts).days
+            if days_since >= interval_days:
+                logger.info(
+                    "%s model stale (%d days since last train, interval=%d days)",
+                    lane, days_since, interval_days,
+                )
+                return True
+        except (ValueError, TypeError):
+            return True
+
+        return False
+
+    def _record_training(self, lane: str) -> None:
+        """Mark a lane's model as freshly trained."""
+        self._model_meta[f"{lane}_last_train"] = datetime.now(timezone.utc).isoformat()
+        self._save_model_meta(self._model_meta)
+        logger.info("%s model training timestamp updated", lane)
+
+    def _run_retraining_if_needed(self) -> Dict[str, bool]:
+        """Check all lanes and retrain stale models.
+
+        Returns:
+            Dict of lane -> whether retraining ran.
+        """
+        results: Dict[str, bool] = {}
+
+        for lane in self._asset_types:
+            if not self._check_retraining_needed(lane):
+                results[lane] = False
+                continue
+
+            try:
+                if lane == "stock" and self.stock_models:
+                    logger.info("Retraining stock models...")
+                    # Retrain on most recent data
+                    for ticker in settings.stock.supported_tickers:
+                        if self.stock_collector:
+                            ohlcv = self.stock_collector.fetch_ohlcv(ticker, interval="1d")
+                            fundamentals = self.stock_collector.fetch_fundamentals(ticker)
+                            features = ohlcv
+                            if self.stock_feature_pipeline:
+                                features = self.stock_feature_pipeline.compute_all(ohlcv, fundamentals)
+                            if not features.empty:
+                                self.stock_models.train_all(features)
+                    self._record_training("stock")
+                    results[lane] = True
+
+                elif lane == "bet" and self.betting_model:
+                    logger.info("Retraining betting model...")
+                    for sport in settings.betting.supported_sports:
+                        if self.betting_collector:
+                            odds_df = self.betting_collector.fetch_odds(sport)
+                            historical = self.betting_collector.fetch_historical_results(sport)
+                            features = odds_df
+                            if self.betting_features and not odds_df.empty:
+                                features = self.betting_features.compute_all(odds_df, historical)
+                            if not features.empty:
+                                if "home_score" in historical.columns and not historical.empty:
+                                    outcomes = (historical.get("home_score", 0) > historical.get("away_score", 0)).astype(int)
+                                    self.betting_model.train(features, outcomes)
+                    self._record_training("bet")
+                    results[lane] = True
+
+                elif lane == "crypto":
+                    logger.info("Crypto retraining triggered (deferred to main bot training pipeline)")
+                    self._record_training("crypto")
+                    results[lane] = True
+
+            except Exception as exc:
+                logger.error("Retraining failed for %s: %s", lane, exc)
+                results[lane] = False
+
+        return results
+
+    # ------------------------------------------------------------------
+    # Disk space monitoring
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def check_disk_space(path: Optional[Path] = None) -> Dict[str, Any]:
+        """Check disk space and warn if critically low.
+
+        Returns:
+            Dict with total_gb, used_gb, free_gb, free_pct, is_critical.
+        """
+        target = str(path or PROJECT_ROOT)
+        try:
+            usage = shutil.disk_usage(target)
+            total_gb = usage.total / (1024 ** 3)
+            used_gb = usage.used / (1024 ** 3)
+            free_gb = usage.free / (1024 ** 3)
+            free_pct = (usage.free / usage.total) * 100 if usage.total > 0 else 0
+
+            is_critical = free_pct < DISK_MIN_FREE_PCT or free_gb < DISK_MIN_FREE_GB
+
+            if is_critical:
+                logger.critical(
+                    "DISK SPACE CRITICAL: %.1f GB free (%.1f%%) — "
+                    "log rotation or cleanup needed",
+                    free_gb, free_pct,
+                )
+            elif free_pct < DISK_MIN_FREE_PCT * 2:
+                logger.warning(
+                    "Disk space low: %.1f GB free (%.1f%%)", free_gb, free_pct,
+                )
+
+            return {
+                "total_gb": round(total_gb, 2),
+                "used_gb": round(used_gb, 2),
+                "free_gb": round(free_gb, 2),
+                "free_pct": round(free_pct, 1),
+                "is_critical": is_critical,
+            }
+        except Exception as exc:
+            logger.error("Disk space check failed: %s", exc)
+            return {"error": str(exc), "is_critical": False}
 
     @retry(max_attempts=3, delay=2.0)
     def _fetch_data(self, symbol: str):
@@ -622,25 +854,225 @@ class AutoTrader:
 
         return sig
 
+    def run_stock_cycle(self, ticker: str) -> dict:
+        """One full collect -> analyse -> trade cycle for a stock ticker."""
+
+        if self.stock_collector is None:
+            return {"symbol": ticker, "signal": "SKIP", "reason": "stock lane not initialised"}
+
+        if self.circuit.is_open:
+            return {"symbol": ticker, "signal": "PAUSED", "reason": "circuit breaker open"}
+
+        if self.safety.is_halted:
+            return {"symbol": ticker, "signal": "HALTED", "reason": self.safety._halt_reason}
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        # 1. Fetch stock data
+        try:
+            ohlcv = self.stock_collector.fetch_ohlcv(ticker, interval="1h")
+        except Exception as exc:
+            self.circuit.record_failure()
+            return {"symbol": ticker, "signal": "ERROR", "reason": f"stock data: {exc}"}
+
+        if ohlcv.empty or len(ohlcv) < 20:
+            return {"symbol": ticker, "signal": "SKIP", "reason": f"insufficient data ({len(ohlcv)} rows)"}
+
+        # 2. Features
+        fundamentals = self.stock_collector.fetch_fundamentals(ticker)
+        features = ohlcv
+        if self.stock_feature_pipeline:
+            features = self.stock_feature_pipeline.compute_all(ohlcv, fundamentals)
+        if features.empty:
+            features = ohlcv
+
+        latest = features.iloc[-1].to_dict()
+        price = float(ohlcv["close"].iloc[-1])
+
+        # 3. Signal
+        if self.stock_models and self.stock_models.is_trained:
+            sig_result = self.stock_models.predict(features)
+        else:
+            sig_result = self.signal_gen.generate(latest)
+
+        sig = {
+            "symbol": ticker,
+            "signal": sig_result.get("signal", "HOLD"),
+            "confidence": sig_result.get("confidence", 0),
+            "price": round(price, 2),
+            "timestamp": now_iso,
+            "asset_type": "stock",
+        }
+
+        # 4. Execute if actionable
+        if sig["signal"] in ("BUY", "SELL") and sig["confidence"] >= 0.45:
+            balance = self.router.get_unified_balance()
+            usd = balance.get("total_usd_equivalent", 10_000)
+            positions = self.router.get_all_positions()
+            equity = usd + sum(p.get("unrealized_pnl", 0) for p in positions)
+            trade_size = self.risk.calculate_position_size(usd)
+
+            verdict = self.safety.pre_trade_check(
+                symbol=ticker,
+                side=sig["signal"].lower(),
+                trade_size_usd=trade_size,
+                current_balance=usd,
+                current_equity=equity,
+                current_price=price,
+                open_positions=positions,
+                features_row=latest,
+                data_timestamp=time.time(),
+            )
+
+            if not verdict.safe:
+                sig["trade_blocked"] = verdict.reason
+                logger.info("  BLOCKED %s %s: %s", sig["signal"], ticker, verdict.reason)
+            else:
+                signal = UnifiedSignal(
+                    asset_type=AssetType.STOCK,
+                    symbol=ticker,
+                    side=sig["signal"],
+                    confidence=sig["confidence"],
+                    amount=verdict.adjusted_size or trade_size,
+                    price=price,
+                )
+                trade = self.router.route_signal(signal)
+
+                if trade.get("status") == "filled":
+                    self.circuit.record_success()
+                    fee = trade.get("fee", 0)
+                    self.pnl.record_entry(trade)
+                    self.safety.record_trade(ticker, fee, is_loss=False)
+                    trade["pnl"] = ""
+                    trade["balance_after"] = usd
+                    append_trade_csv(trade)
+                    sig["trade"] = {
+                        "order_id": trade.get("order_id"),
+                        "filled": trade.get("filled_amount"),
+                        "price": trade.get("price"),
+                        "fee": fee,
+                    }
+                    logger.info(
+                        "  TRADE %s %s $%.2f @ $%.2f (conf=%.2f)",
+                        sig["signal"], ticker, trade_size, price, sig["confidence"],
+                    )
+                elif trade.get("status") == "rejected":
+                    sig["trade_rejected"] = trade.get("reason", "unknown")
+                else:
+                    self.circuit.record_failure()
+
+        return sig
+
+    def run_betting_cycle(self) -> List[dict]:
+        """One full collect -> analyse -> bet cycle for all configured sports."""
+
+        if self.betting_collector is None:
+            return [{"sport": "all", "signal": "SKIP", "reason": "betting lane not initialised"}]
+
+        if self.circuit.is_open:
+            return [{"sport": "all", "signal": "PAUSED", "reason": "circuit breaker open"}]
+
+        if self.safety.is_halted:
+            return [{"sport": "all", "signal": "HALTED", "reason": self.safety._halt_reason}]
+
+        results = []
+        bet_executor = self.router.bet_executor
+
+        for sport in settings.betting.supported_sports:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            try:
+                odds_df = self.betting_collector.fetch_odds(sport)
+                if odds_df.empty:
+                    results.append({"sport": sport, "signal": "SKIP", "reason": "no odds data"})
+                    continue
+
+                historical = self.betting_collector.fetch_historical_results(sport)
+                features = odds_df
+                if self.betting_features:
+                    features = self.betting_features.compute_all(odds_df, historical)
+
+                if features.empty:
+                    results.append({"sport": sport, "signal": "SKIP", "reason": "no features"})
+                    continue
+
+                signal = self.betting_model.predict(features)
+
+                sig = {
+                    "sport": sport,
+                    "symbol": signal.symbol,
+                    "side": str(signal.side),
+                    "confidence": signal.confidence,
+                    "asset_type": "bet",
+                    "timestamp": now_iso,
+                    "edge": signal.metadata.get("edge", 0),
+                }
+
+                if signal.side not in ("BACK", "LAY"):
+                    sig["signal"] = "PASS"
+                    results.append(sig)
+                    continue
+
+                sig["signal"] = str(signal.side)
+                result = self.router.route_signal(signal)
+
+                if result.get("status") == "filled":
+                    self.circuit.record_success()
+                    sig["trade"] = {
+                        "order_id": result.get("order_id"),
+                        "stake": result.get("stake"),
+                        "odds": result.get("odds"),
+                    }
+                    logger.info(
+                        "  BET %s %s $%.2f @ %+.0f (edge=%.1f%%, conf=%.2f)",
+                        signal.side, signal.symbol,
+                        result.get("stake", 0), result.get("odds", 0),
+                        signal.metadata.get("edge", 0) * 100,
+                        signal.confidence,
+                    )
+                elif result.get("status") == "rejected":
+                    sig["trade_rejected"] = result.get("reason", "unknown")
+                    logger.info("  BET REJECTED %s: %s", signal.symbol, result.get("reason"))
+                else:
+                    self.circuit.record_failure()
+
+                results.append(sig)
+
+            except Exception as exc:
+                self.circuit.record_failure()
+                logger.error("  [bet] %s ERROR: %s", sport, exc)
+                results.append({"sport": sport, "signal": "ERROR", "reason": str(exc)})
+
+        # Log betting stats
+        if bet_executor:
+            stats = bet_executor.get_stats()
+            logger.info(
+                "  Betting: bankroll=$%.2f | bets=%d | win=%.0f%% | PnL=$%.2f | ROI=%.1f%% | open=%d",
+                stats["bankroll"], stats["total_bets"], stats["win_rate"],
+                stats["total_pnl"], stats["roi_pct"], stats["open_bets"],
+            )
+
+        return results
+
     def get_portfolio_summary(self) -> dict:
-        balance = self.executor.get_balance()
-        positions = self.executor.get_positions()
-        usdt = balance.get("USDT", {}).get("total", 0)
+        unified = self.router.get_unified_balance()
+        positions = self.router.get_all_positions()
+        equity = unified.get("total_usd_equivalent", 10_000)
         unrealised = sum(p.get("unrealized_pnl", 0) for p in positions)
-        equity = usdt + unrealised
         return_pct = ((equity - self.pnl.initial_balance) / self.pnl.initial_balance * 100
                       if self.pnl.initial_balance else 0)
         return {
-            "balance_usdt": round(usdt, 2),
+            "balance_usd": round(equity, 2),
             "equity": round(equity, 2),
             "return_pct": round(return_pct, 2),
             "open_positions": len(positions),
             "unrealized_pnl": round(unrealised, 2),
+            "lanes": unified.get("by_lane", {}),
             "safety_status": self.safety.get_status(),
             "positions": [
                 {
                     "symbol": p.get("symbol"),
                     "side": p.get("side"),
+                    "asset_type": p.get("asset_type", "crypto"),
                     "entry": p.get("entry_price"),
                     "current": p.get("current_price"),
                     "pnl": round(p.get("unrealized_pnl", 0), 2),
@@ -655,7 +1087,7 @@ class AutoTrader:
 # =====================================================================
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Autonomous AI Crypto Trader")
+    parser = argparse.ArgumentParser(description="OmniTrade AI — Autonomous Multi-Asset Trader")
     parser.add_argument("--test", action="store_true",
                         help="Quick 3-cycle test with 10s intervals, no git push")
     parser.add_argument("--cycles", type=int, default=0,
@@ -665,7 +1097,12 @@ def main() -> None:
     parser.add_argument("--commit-interval", type=int, default=60,
                         help="Minutes between auto-commits to GitHub")
     parser.add_argument("--symbols", nargs="+", default=None,
-                        help="Override trading symbols")
+                        help="Override crypto trading symbols")
+    parser.add_argument("--tickers", nargs="+", default=None,
+                        help="Override stock tickers")
+    parser.add_argument("--asset-types", nargs="+", choices=["crypto", "stock", "bet"],
+                        default=None,
+                        help="Asset classes to trade (default: all enabled in config)")
     args = parser.parse_args()
 
     # Test mode overrides
@@ -675,16 +1112,29 @@ def main() -> None:
         args.commit_interval = 9999  # don't push during test
 
     ensure_dirs()
+    setup_log_rotation()
     symbols = args.symbols or settings.exchange.supported_symbols
+    tickers = args.tickers or settings.stock.supported_tickers
+    asset_types = args.asset_types or settings.asset.enabled_assets
+
+    has_crypto = "crypto" in asset_types
+    has_stock = "stock" in asset_types
+    has_bet = "bet" in asset_types
 
     logger.info("=" * 60)
-    logger.info("  AUTONOMOUS TRADER%s", " (TEST MODE)" if args.test else "")
-    logger.info("  Symbols : %s", ", ".join(symbols))
+    logger.info("  OMNITRADE AI — Autonomous Trader%s", " (TEST MODE)" if args.test else "")
+    logger.info("  Lanes   : %s", ", ".join(asset_types))
+    if has_crypto:
+        logger.info("  Crypto  : %s", ", ".join(symbols))
+    if has_stock:
+        logger.info("  Stocks  : %s", ", ".join(tickers))
+    if has_bet:
+        logger.info("  Betting : %s", ", ".join(settings.betting.supported_sports))
     logger.info("  Interval: %ds | Commit: every %dm", args.interval, args.commit_interval)
     logger.info("  Mode    : PAPER (sandbox)")
     logger.info("=" * 60)
 
-    trader = AutoTrader()
+    trader = AutoTrader(asset_types=asset_types)
     last_commit = time.time()
     cycle = 0
     errors_this_session = 0
@@ -699,31 +1149,74 @@ def main() -> None:
             logger.info("── Cycle %d ──────────────────────────────────", cycle)
             signals: Dict[str, Any] = {}
 
-            for symbol in symbols:
+            # ── Crypto lane ──
+            if has_crypto:
+                for symbol in symbols:
+                    try:
+                        result = trader.run_cycle(symbol)
+                        signals[symbol] = result
+
+                        ind = result.get("indicators", {})
+                        logger.info(
+                            "  [crypto] %s → %-4s (conf=%.2f) RSI=%-5s MACD=%-8s BB=%-6s price=$%s",
+                            symbol,
+                            result.get("signal", "?"),
+                            result.get("confidence", 0),
+                            ind.get("rsi", "—"),
+                            ind.get("macd_hist", "—"),
+                            ind.get("bb_pct", "—"),
+                            result.get("price", "?"),
+                        )
+
+                        if result.get("reasons"):
+                            logger.info("    reasons: %s", " | ".join(result["reasons"]))
+
+                    except Exception as exc:
+                        errors_this_session += 1
+                        logger.error("  [crypto] %s ERROR: %s", symbol, exc)
+                        logger.debug(traceback.format_exc())
+                        signals[symbol] = {"signal": "ERROR", "error": str(exc)}
+
+            # ── Stock lane ──
+            if has_stock:
+                for ticker in tickers:
+                    try:
+                        result = trader.run_stock_cycle(ticker)
+                        key = f"stock:{ticker}"
+                        signals[key] = result
+                        logger.info(
+                            "  [stock]  %s → %-4s (conf=%.2f) price=$%s",
+                            ticker,
+                            result.get("signal", "?"),
+                            result.get("confidence", 0),
+                            result.get("price", "?"),
+                        )
+                    except Exception as exc:
+                        errors_this_session += 1
+                        logger.error("  [stock] %s ERROR: %s", ticker, exc)
+                        logger.debug(traceback.format_exc())
+                        signals[f"stock:{ticker}"] = {"signal": "ERROR", "error": str(exc)}
+
+            # ── Betting lane ──
+            if has_bet:
                 try:
-                    result = trader.run_cycle(symbol)
-                    signals[symbol] = result
-
-                    ind = result.get("indicators", {})
-                    logger.info(
-                        "  %s → %-4s (conf=%.2f) RSI=%-5s MACD=%-8s BB=%-6s price=$%s",
-                        symbol,
-                        result.get("signal", "?"),
-                        result.get("confidence", 0),
-                        ind.get("rsi", "—"),
-                        ind.get("macd_hist", "—"),
-                        ind.get("bb_pct", "—"),
-                        result.get("price", "?"),
-                    )
-
-                    if result.get("reasons"):
-                        logger.info("    reasons: %s", " | ".join(result["reasons"]))
-
+                    bet_results = trader.run_betting_cycle()
+                    for br in bet_results:
+                        sport = br.get("sport", "?")
+                        key = f"bet:{sport}"
+                        signals[key] = br
+                        logger.info(
+                            "  [bet]    %s → %-4s (conf=%.2f) edge=%.3f",
+                            br.get("symbol", sport),
+                            br.get("signal", "?"),
+                            br.get("confidence", 0),
+                            br.get("edge", 0),
+                        )
                 except Exception as exc:
                     errors_this_session += 1
-                    logger.error("  %s ERROR: %s", symbol, exc)
+                    logger.error("  [bet] ERROR: %s", exc)
                     logger.debug(traceback.format_exc())
-                    signals[symbol] = {"signal": "ERROR", "error": str(exc)}
+                    signals["bet:all"] = {"signal": "ERROR", "error": str(exc)}
 
             # Portfolio summary
             portfolio = trader.get_portfolio_summary()
@@ -755,6 +1248,29 @@ def main() -> None:
                 auto_commit_and_push()
                 last_commit = time.time()
 
+            # Retraining check (every 10 cycles)
+            if cycle % 10 == 0:
+                logger.info("Checking model staleness...")
+                retrain_results = trader._run_retraining_if_needed()
+                logger.info("Retraining results: %s", retrain_results)
+
+            # Disk space check (every 50 cycles)
+            if cycle % 50 == 0:
+                disk = AutoTrader.check_disk_space()
+                if disk.get("is_critical"):
+                    logger.critical(
+                        "DISK CRITICAL — attempting emergency log rotation"
+                    )
+                logger.info(
+                    "Disk: %.1f GB free (%.1f%%)",
+                    disk.get("free_gb", 0), disk.get("free_pct", 0),
+                )
+
+            # Record portfolio return for adaptive sizing
+            trader.risk.record_return(
+                portfolio.get("return_pct", 0) / 100.0
+            )
+
             # Cycle timing
             cycle_duration = time.time() - cycle_start
             sleep_time = max(0, args.interval - cycle_duration)
@@ -781,7 +1297,7 @@ def main() -> None:
         logger.info("Final commit...")
         auto_commit_and_push()
 
-    logger.info("Autonomous trader stopped.")
+    logger.info("OmniTrade AI stopped.")
 
 
 if __name__ == "__main__":

@@ -1,40 +1,44 @@
-# AI Crypto Trading Bot
+# OmniTrade AI
 
-An AI-powered cryptocurrency trading bot that combines deep reinforcement learning, time-series forecasting, sentiment analysis, and ensemble voting to generate trading signals.
+An AI-powered multi-asset autonomous trading system supporting crypto, stocks, and sports betting. Combines deep reinforcement learning, time-series forecasting, sentiment analysis, and ensemble voting across all asset classes.
 
 ## Architecture
 
 ```
-crypto_bot/
-├── config/            # Settings & logging configuration
+omnitrade/
+├── config/            # Settings, asset types, logging configuration
 ├── data/
-│   ├── collectors/    # Market, on-chain, sentiment, macro data
+│   ├── collectors/    # Market, on-chain, sentiment, macro, stock, betting
 │   └── storage/       # MongoDB persistence layer
-├── features/          # Feature engineering & XGBoost selection
-├── models/            # AI models
+├── features/          # Feature engineering across all asset lanes
+├── models/            # AI models (crypto, stock, betting)
 │   ├── lstm_model     # LSTM / BiLSTM / GRU forecasting
 │   ├── ddqn_agent     # Double DQN reinforcement learning
 │   ├── xgboost_model  # XGBoost signal classification
 │   ├── sentiment_model# FinBERT sentiment analysis
 │   ├── cnn_model      # CNN candlestick pattern recognition
+│   ├── stock_models   # Stock-specific model factory
+│   ├── betting_models # Value betting, Poisson, Kelly staking
 │   └── training/      # RL environment & training orchestrator
 ├── ensemble/          # Weighted voting system
-├── backtesting/       # Engine, walk-forward, overfitting detection
-├── risk/              # Risk management engine
-├── execution/         # Trade execution (live + paper)
+├── backtesting/       # Engine, walk-forward, stock & betting backtesters
+├── risk/              # Risk management (crypto, betting-specific)
+├── execution/         # AssetRouter, trade/betting/stock executors
 └── monitoring/        # Telegram alerts, Grafana metrics, health checks
 ```
 
 ## Features
 
-- **Multi-source data pipeline** — OHLCV prices, on-chain whale tracking, Reddit/Twitter/News sentiment, macroeconomic indicators (VIX, DXY, Fed rate)
+- **3-lane architecture** — Crypto (ccxt), Stocks (yfinance + Alpaca), Sports Betting (The Odds API)
+- **Multi-source data pipeline** — OHLCV prices, on-chain whale tracking, Reddit/Twitter/News sentiment, macroeconomic indicators (VIX, DXY, Fed rate), stock fundamentals, sports odds
 - **30+ technical indicators** — RSI, MACD, Bollinger Bands, Ichimoku, ADX, Stochastic, and more
 - **XGBoost feature selection** — automatically ranks and selects the most predictive features
-- **5 AI models** — LSTM, Double DQN, XGBoost, FinBERT sentiment, CNN on candlestick images
+- **8 AI models** — LSTM, Double DQN, XGBoost, FinBERT, CNN, stock model factory, value betting, Poisson goals
 - **Ensemble voting** — weighted majority vote with configurable confidence threshold
-- **Backtesting engine** — walk-forward validation, overfitting detection, crash scenario testing
-- **Risk management** — position sizing, stop-loss/take-profit, trailing stops, daily drawdown limits
-- **Paper trading mode** — test strategies with simulated orders against live market data
+- **Backtesting engine** — walk-forward validation, overfitting detection, stock & betting backtesters
+- **Risk management** — position sizing, stop-loss/take-profit, trailing stops, daily drawdown limits, Kelly criterion, adaptive Sharpe-based sizing
+- **Paper trading mode** — test strategies with simulated orders across all asset classes
+- **Autonomous operation** — Auto-retraining, circuit breakers, disk monitoring, log rotation, health checks
 - **Real-time monitoring** — Telegram alerts, Prometheus metrics, Grafana dashboards
 - **Docker deployment** — containerized with MongoDB, Grafana, and Prometheus
 
@@ -44,7 +48,7 @@ crypto_bot/
 
 ```bash
 git clone <repo-url>
-cd Crypto-AI
+cd OmniTrade-AI
 python -m venv venv
 source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
@@ -72,16 +76,16 @@ cp .env.example .env
 
 ```bash
 # Paper trading (default, safe)
-python -m crypto_bot.main
+python -m omnitrade.main
 
 # Paper trading with specific symbols
-python -m crypto_bot.main --symbols BTC/USDT ETH/USDT
+python -m omnitrade.main --symbols BTC/USDT ETH/USDT
 
 # Backtesting mode
-python -m crypto_bot.main --backtest
+python -m omnitrade.main --backtest
 
 # Live trading (requires real API keys, use with caution)
-python -m crypto_bot.main --mode live
+python -m omnitrade.main --mode live
 ```
 
 ### 4. Docker Deployment
@@ -114,8 +118,8 @@ Edit via environment variables or `.env`:
 The bot supports training individual models or all at once:
 
 ```python
-from crypto_bot.models.training.trainer import ModelTrainer
-from crypto_bot.config.settings import settings
+from omnitrade.models.training.trainer import ModelTrainer
+from omnitrade.config.settings import settings
 
 trainer = ModelTrainer(settings)
 results = trainer.train_all_models(features_df)
@@ -124,8 +128,8 @@ results = trainer.train_all_models(features_df)
 ## Backtesting
 
 ```python
-from crypto_bot.backtesting.engine import BacktestEngine
-from crypto_bot.backtesting.overfitting_detector import OverfittingDetector
+from omnitrade.backtesting.engine import BacktestEngine
+from omnitrade.backtesting.overfitting_detector import OverfittingDetector
 
 engine = BacktestEngine(settings)
 result = engine.run(strategy_func, historical_data)
@@ -145,7 +149,7 @@ pip install -r requirements.txt
 pytest
 
 # Lint
-ruff check crypto_bot/
+ruff check omnitrade/
 ```
 
 ## Tech Stack

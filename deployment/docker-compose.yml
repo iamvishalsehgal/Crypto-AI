@@ -2,15 +2,21 @@ version: "3.9"
 
 services:
   # -------------------------------------------------------------------
-  # Core trading bot
+  # OmniTrade AI — multi-asset autonomous trading bot
   # -------------------------------------------------------------------
-  trading-bot:
+  omnitrade-bot:
     build:
       context: ..
       dockerfile: deployment/Dockerfile
-    container_name: crypto-trading-bot
+    container_name: omnitrade-bot
     env_file:
       - ../.env
+    environment:
+      - EXCHANGE_API_KEY=${EXCHANGE_API_KEY:-}
+      - EXCHANGE_API_SECRET=${EXCHANGE_API_SECRET:-}
+      - STOCK_ALPACA_API_KEY=${STOCK_ALPACA_API_KEY:-}
+      - STOCK_ALPACA_API_SECRET=${STOCK_ALPACA_API_SECRET:-}
+      - BETTING_ODDS_API_KEY=${BETTING_ODDS_API_KEY:-}
     ports:
       - "8000:8000"
     depends_on:
@@ -18,49 +24,49 @@ services:
         condition: service_started
     restart: unless-stopped
     networks:
-      - bot-network
+      - omnitrade-network
 
   # -------------------------------------------------------------------
-  # MongoDB for OHLCV, trades, model metrics, etc.
+  # MongoDB — OHLCV, trades, model metrics, stock & betting data
   # -------------------------------------------------------------------
   mongodb:
     image: mongo:7
-    container_name: crypto-mongodb
+    container_name: omnitrade-mongodb
     ports:
       - "27017:27017"
     volumes:
-      - mongodb-data:/data/db
+      - omnitrade-mongo-data:/data/db
     restart: unless-stopped
     networks:
-      - bot-network
+      - omnitrade-network
 
   # -------------------------------------------------------------------
-  # Prometheus -- scrapes the bot's /metrics endpoint
+  # Prometheus — scrapes the bot's /metrics endpoint
   # -------------------------------------------------------------------
   prometheus:
     image: prom/prometheus:latest
-    container_name: crypto-prometheus
+    container_name: omnitrade-prometheus
     ports:
       - "9090:9090"
     volumes:
-      - prometheus-data:/prometheus
+      - omnitrade-prometheus-data:/prometheus
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     depends_on:
-      - trading-bot
+      - omnitrade-bot
     restart: unless-stopped
     networks:
-      - bot-network
+      - omnitrade-network
 
   # -------------------------------------------------------------------
-  # Grafana -- dashboards backed by Prometheus
+  # Grafana — dashboards backed by Prometheus
   # -------------------------------------------------------------------
   grafana:
     image: grafana/grafana:latest
-    container_name: crypto-grafana
+    container_name: omnitrade-grafana
     ports:
       - "3000:3000"
     volumes:
-      - grafana-data:/var/lib/grafana
+      - omnitrade-grafana-data:/var/lib/grafana
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
@@ -68,13 +74,13 @@ services:
       - prometheus
     restart: unless-stopped
     networks:
-      - bot-network
+      - omnitrade-network
 
 networks:
-  bot-network:
+  omnitrade-network:
     driver: bridge
 
 volumes:
-  mongodb-data:
-  grafana-data:
-  prometheus-data:
+  omnitrade-mongo-data:
+  omnitrade-grafana-data:
+  omnitrade-prometheus-data:

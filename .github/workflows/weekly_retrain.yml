@@ -1,0 +1,76 @@
+name: Weekly Model Retraining
+
+on:
+  schedule:
+    - cron: "41 2 * * 0"
+  workflow_dispatch:
+    inputs:
+      backtest:
+        description: "Run backtesting after retraining?"
+        default: "true"
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-weekly-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-weekly-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run retraining for all lanes
+        env:
+          EXCHANGE_API_KEY: ${{ secrets.EXCHANGE_API_KEY }}
+          EXCHANGE_API_SECRET: ${{ secrets.EXCHANGE_API_SECRET }}
+          EXCHANGE_SANDBOX_MODE: "true"
+          STOCK_ALPACA_API_KEY: ${{ secrets.STOCK_ALPACA_API_KEY }}
+          STOCK_ALPACA_API_SECRET: ${{ secrets.STOCK_ALPACA_API_SECRET }}
+          BETTING_ODDS_API_KEY: ${{ secrets.BETTING_ODDS_API_KEY }}
+        run: |
+          python scripts/auto_trader.py \
+            --asset-types crypto stock bet \
+            --cycles 12 --interval 30 \
+            --commit-interval 999
+          echo "Retraining check completed (cycle 10 triggers staleness check)"
+
+      - name: Run backtesting
+        if: ${{ github.event.inputs.backtest != 'false' }}
+        run: |
+          python -m omnitrade.main --backtest --asset-types crypto stock bet
+
+      - name: Commit reports & model metadata
+        if: always()
+        run: |
+          git config user.name "OmniTrade Bot"
+          git config user.email "bot@omnitrade.local"
+          git add reports/ logs/ || true
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "bot: weekly retrain report — $(date -u '+%Y-%m-%d %H:%M UTC')"
+            git push origin master
+          fi

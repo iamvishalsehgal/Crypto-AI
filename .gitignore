@@ -58,6 +58,3 @@ models/saved/
 *.pt
 *.pth
 *.onnx
-
-# Reports (tracked — auto-committed by bot)
-# reports/

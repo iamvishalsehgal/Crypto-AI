@@ -1,0 +1,80 @@
+# OmniTrade AI — Agent Pipeline Configuration
+# ============================================
+# Defines which agents to activate and their triggers.
+# Agents live in ~/.claude/agents/ and are invoked by name.
+#
+# Triggers:
+#   - cron: Scheduled via GitHub Actions
+#   - event: Fired after specific pipeline events
+#   - manual: Invoked by /command or workflow_dispatch
+
+agents:
+  # Weekly orchestrator — runs Sunday 02:00 UTC
+  orchestrator:
+    name: "Agents Orchestrator"
+    file: "agents-orchestrator.md"
+    trigger: cron
+    schedule: "0 2 * * 0"
+    description: "Weekly pipeline coordinator — reviews all lanes, triggers retraining if stale"
+
+  # Portfolio review — after each daily trading cycle
+  researcher:
+    name: "Investment Researcher"
+    file: "finance-investment-researcher.md"
+    trigger: event
+    on: "daily_trade_complete"
+    description: "Reviews portfolio performance across all lanes, checks model degradation"
+
+  # DevOps — after research report
+  devops:
+    name: "DevOps Automator"
+    file: "engineering-devops-automator.md"
+    trigger: event
+    on: "research_report_complete"
+    description: "CI/CD pipeline management, Docker image builds, report deployment"
+
+  # Data quality — every cycle + weekly audit
+  data_engineer:
+    name: "Data Engineer"
+    file: "engineering-data-engineer.md"
+    trigger: event
+    on: "data_collection_complete"
+    description: "Validates data quality across all 3 lanes, flags anomalies"
+
+  # Security — first day of each quarter
+  security:
+    name: "Security Engineer"
+    file: "engineering-security-engineer.md"
+    trigger: cron
+    schedule: "0 6 1 1,4,7,10 *"
+    description: "Quarterly API key audit, vulnerability scan, dependency check"
+
+# Lane-specific maintenance tasks
+maintenance:
+  crypto:
+    retrain_interval_days: 7
+    health_check: true
+  stock:
+    retrain_interval_days: 14
+    health_check: true
+    min_data_rows: 20
+  bet:
+    retrain_interval_days: 30
+    health_check: true
+    min_odds_sports: 1
+
+# Self-healing configuration
+self_healing:
+  circuit_breaker:
+    max_failures: 5
+    cooldown_seconds: 300
+  disk_monitor:
+    min_free_pct: 10.0
+    min_free_gb: 1.0
+  log_rotation:
+    max_mb: 50
+    backup_count: 7
+  graceful_degradation:
+    missing_api_key: disable_lane
+    exchange_down: paper_only
+    db_down: skip_persistence

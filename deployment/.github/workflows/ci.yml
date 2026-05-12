@@ -65,7 +65,7 @@ jobs:
           pip install pytest pytest-cov pytest-asyncio
 
       - name: Run tests
-        run: pytest --cov=crypto_bot --cov-report=term-missing -q
+        run: pytest --cov=omnitrade --cov-report=term-missing -q
 
   # -----------------------------------------------------------------
   # Docker build (master only)
@@ -86,6 +86,6 @@ jobs:
           context: .
           file: deployment/Dockerfile
           push: false
-          tags: crypto-trading-bot:${{ github.sha }}
+          tags: omnitrade-ai:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -1,0 +1,143 @@
+name: Weekly Maintenance
+
+on:
+  schedule:
+    - cron: "11 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      full_audit:
+        description: "Run full dependency audit and security scan?"
+        default: "false"
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  maintenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-maint-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-maint-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: System health check
+        run: |
+          python -c "
+          import json
+          from datetime import datetime, timezone
+          from omnitrade.config.settings import settings
+          from omnitrade.execution.asset_router import AssetRouter
+          from omnitrade.monitoring.health_check import HealthChecker
+
+          router = AssetRouter(settings=settings, mode='paper')
+          hc = HealthChecker(settings)
+          status = router.get_status()
+          health = hc.get_health_response(lane_status=status['lane_status'])
+
+          report = {
+              'timestamp': datetime.now(timezone.utc).isoformat(),
+              'health': health,
+              'lanes': status,
+              'retrain_intervals': {'crypto': 7, 'stock': 14, 'bet': 30},
+          }
+
+          with open('reports/weekly_health.json', 'w') as f:
+              json.dump(report, f, indent=2, default=str)
+
+          print('Health:', health['overall'])
+          print('Active lanes:', status['enabled_lanes'])
+          print('Lane status:', status['lane_status'])
+          "
+
+      - name: Data quality audit
+        run: |
+          python -c "
+          from omnitrade.config.settings import settings
+          from omnitrade.data.collectors.stock_data import StockDataCollector
+          from omnitrade.data.collectors.betting_data import BettingDataCollector
+
+          issues = []
+
+          # Check stock data availability
+          if 'stock' in settings.asset.enabled_assets:
+              sc = StockDataCollector(settings)
+              for ticker in settings.stock.supported_tickers:
+                  try:
+                      ohlcv = sc.fetch_ohlcv(ticker, interval='1d', period='7d')
+                      if ohlcv.empty or len(ohlcv) < 3:
+                          issues.append(f'stock:{ticker} — insufficient data ({len(ohlcv)} rows)')
+                      else:
+                          print(f'stock:{ticker} — OK ({len(ohlcv)} rows)')
+                  except Exception as e:
+                      issues.append(f'stock:{ticker} — error: {e}')
+
+          # Check betting data availability
+          if 'bet' in settings.asset.enabled_assets:
+              bc = BettingDataCollector(settings)
+              for sport in settings.betting.supported_sports:
+                  try:
+                      odds = bc.fetch_odds(sport)
+                      if odds.empty:
+                          issues.append(f'bet:{sport} — no odds data')
+                      else:
+                          print(f'bet:{sport} — OK ({len(odds)} events)')
+                  except Exception as e:
+                      issues.append(f'bet:{sport} — error: {e}')
+
+          if issues:
+              print('\\nDATA QUALITY ISSUES:')
+              for issue in issues:
+                  print(f'  - {issue}')
+          else:
+              print('\\nAll data sources healthy.')
+          "
+
+      - name: Full dependency audit
+        if: ${{ github.event.inputs.full_audit == 'true' }}
+        run: |
+          pip list --outdated --format=columns > reports/outdated_packages.txt 2>/dev/null || true
+          pip check 2>&1 > reports/dependency_conflicts.txt || true
+          echo "Package audit complete."
+
+      - name: Clean old reports
+        run: |
+          find reports/ -name "*.png" -mtime +30 -delete 2>/dev/null || true
+          find reports/ -name "summary_*.json" -mtime +90 -delete 2>/dev/null || true
+          find logs/ -name "*.log.*" -mtime +14 -delete 2>/dev/null || true
+          echo "Old reports and logs cleaned."
+
+      - name: Commit maintenance report
+        if: always()
+        run: |
+          git config user.name "OmniTrade Bot"
+          git config user.email "bot@omnitrade.local"
+          git add reports/ logs/ config/ || true
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "bot: weekly maintenance — $(date -u '+%Y-%m-%d %H:%M UTC')"
+            git push origin master
+          fi
