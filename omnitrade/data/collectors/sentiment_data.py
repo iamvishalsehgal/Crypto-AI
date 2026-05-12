@@ -7,7 +7,6 @@ then provides a simple sentiment summary for downstream ML models.
 
 from __future__ import annotations
 
-import os
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -80,15 +79,11 @@ class SentimentCollector:
         self._reddit = None  # lazy init
 
         # --- Twitter / X (tweepy) ---
-        self._twitter_bearer: str = getattr(
-            settings, "TWITTER_BEARER_TOKEN", ""
-        ) or os.environ.get("TWITTER_BEARER_TOKEN", "")
+        self._twitter_bearer: str = settings.sentiment.twitter_bearer_token
         self._twitter_client = None  # lazy init
 
         # --- NewsAPI ---
-        self._news_api_key: str = getattr(
-            settings, "NEWS_API_KEY", ""
-        ) or os.environ.get("NEWS_API_KEY", "")
+        self._news_api_key: str = settings.sentiment.news_api_key
         self._news_client = None  # lazy init
 
         # --- Sentiment analyzer ---

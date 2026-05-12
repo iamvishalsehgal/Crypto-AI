@@ -8,7 +8,6 @@ presents them as a unified DataFrame.
 
 from __future__ import annotations
 
-import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -84,9 +83,7 @@ class MacroDataCollector:
         """
         self._settings = settings
 
-        self._fred_api_key: str = getattr(
-            settings, "FRED_API_KEY", ""
-        ) or os.environ.get("FRED_API_KEY", "")
+        self._fred_api_key: str = settings.data.fred_api_key
 
         self._fred = None  # lazy init
         self._cache = _TTLCache(default_ttl=_CACHE_TTL)

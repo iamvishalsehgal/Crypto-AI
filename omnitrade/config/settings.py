@@ -133,6 +133,7 @@ class DataSettings(BaseSettings):
     lookback_days: int = Field(
         default=730, description="Number of historical days to fetch"
     )
+    fred_api_key: str = Field(default="", description="FRED API key for macro data")
 
 
 class ModelSettings(BaseSettings):
@@ -190,6 +191,8 @@ class SentimentSettings(BaseSettings):
     )
     reddit_client_id: str = Field(default="", description="Reddit API client ID")
     reddit_client_secret: str = Field(default="", description="Reddit API client secret")
+    twitter_bearer_token: str = Field(default="", description="Twitter/X API bearer token")
+    news_api_key: str = Field(default="", description="NewsAPI key")
 
 
 class MonitoringSettings(BaseSettings):
