@@ -44,7 +44,7 @@ def collect_crypto_data(symbols: list[str]) -> Dict[str, pd.DataFrame]:
 
     for symbol in symbols:
         try:
-            ohlcv = collector.fetch_ohlcv(symbol, timeframe="15m", limit=2000)  # ~3 weeks of 15m candles
+            ohlcv = collector.fetch_ohlcv(symbol, timeframe="1h", limit=2000)  # ~3 weeks of 15m candles
             if not ohlcv.empty and len(ohlcv) >= 100:
                 market_data[symbol] = ohlcv
                 logger.info("Fetched %d candles for %s", len(ohlcv), symbol)
@@ -63,12 +63,12 @@ def engineer_features(ohlcv: pd.DataFrame) -> pd.DataFrame:
     tech = TechnicalFeatures(settings)
     features = tech.compute_all(ohlcv)
 
-    # Generate labels from future returns
+    # Generate labels from future returns (threshold tuned for ~25% non-HOLD)
     if "close" in features.columns:
         future_return = features["close"].pct_change(1).shift(-1)
         labels = pd.Series(0, index=features.index, name="signal")
-        labels[future_return > 0.005] = 1
-        labels[future_return < -0.005] = -1
+        labels[future_return > 0.0015] = 1
+        labels[future_return < -0.0015] = -1
         features["signal"] = labels
         features = features.iloc[:-1]
 
@@ -174,8 +174,8 @@ def train_stock_models() -> Dict[str, Tuple[Any, Dict]]:
             if "close" in features.columns:
                 future_return = features["close"].pct_change(1).shift(-1)
                 features["signal"] = pd.Series(0, index=features.index)
-                features.loc[future_return > 0.005, "signal"] = 1
-                features.loc[future_return < -0.005, "signal"] = -1
+                features.loc[future_return > 0.0015, "signal"] = 1
+                features.loc[future_return < -0.0015, "signal"] = -1
                 features = features.iloc[:-1]
 
             features = features.ffill().bfill().fillna(0)

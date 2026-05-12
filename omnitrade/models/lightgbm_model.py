@@ -108,15 +108,22 @@ class LightGBMTrader:
         y_train_mapped = self._remap_labels(y_train)
         y_val_mapped = self._remap_labels(y_val)
 
+        # Compute balanced sample weights from class distribution
+        classes, counts = np.unique(y_train_mapped, return_counts=True)
+        class_weight = {c: len(y_train_mapped) / (len(classes) * cnt) for c, cnt in zip(classes, counts)}
+        sample_weight = np.array([class_weight[y] for y in y_train_mapped])
+
         logger.info(
-            "Training LightGBM: %d train, %d val, %d features",
+            "Training LightGBM: %d train, %d val, %d features (class weights: %s)",
             len(y_train_mapped), len(y_val_mapped),
             X_train.shape[1] if hasattr(X_train, "shape") else "?",
+            {k: round(v, 2) for k, v in class_weight.items()},
         )
 
         self._model.fit(
             X_train,
             y_train_mapped,
+            sample_weight=sample_weight,
             eval_set=[(X_val, y_val_mapped)],
             eval_metric="multi_logloss",
             callbacks=[],
