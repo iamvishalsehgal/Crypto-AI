@@ -35,7 +35,26 @@ import pandas as pd
 
 from omnitrade.config.settings import Settings, settings
 from omnitrade.config.asset_types import AssetType, UnifiedSignal
+from omnitrade.data.collectors.market_data import MarketDataCollector
+from omnitrade.data.collectors.onchain_data import OnChainCollector
+from omnitrade.data.collectors.sentiment_data import SentimentCollector
+from omnitrade.data.collectors.macro_data import MacroDataCollector
+from omnitrade.data.storage.database import MongoDBStorage
+from omnitrade.ensemble.voting_system import EnsembleVoter
+from omnitrade.execution.asset_router import AssetRouter
+from omnitrade.features.technical import TechnicalFeatures
+from omnitrade.features.onchain_features import OnChainFeatures
+from omnitrade.features.sentiment_features import SentimentFeatures
+from omnitrade.features.macro_features import MacroFeatures
+from omnitrade.monitoring.telegram_bot import TelegramNotifier
+from omnitrade.monitoring.health_check import HealthChecker
+from omnitrade.risk.risk_manager import RiskManager
 from omnitrade.utils.logger import get_logger
+
+# Late imports for backtesting (only used in run_backtest, loaded here for locality)
+from omnitrade.backtesting.engine import BacktestEngine
+from omnitrade.backtesting.walk_forward import WalkForwardValidator
+from omnitrade.backtesting.overfitting_detector import OverfittingDetector
 
 logger = get_logger("omnitrade.main")
 
@@ -68,11 +87,6 @@ class TradingBot:
         logger.info("Initialising OmniTrade AI in %s mode", mode.upper())
 
         # ---- Data collectors ----
-        from omnitrade.data.collectors.market_data import MarketDataCollector
-        from omnitrade.data.collectors.onchain_data import OnChainCollector
-        from omnitrade.data.collectors.sentiment_data import SentimentCollector
-        from omnitrade.data.collectors.macro_data import MacroDataCollector
-
         self.market_collector = MarketDataCollector(self._settings)
         self.onchain_collector = OnChainCollector(self._settings)
         self.sentiment_collector = SentimentCollector(self._settings)
@@ -85,17 +99,10 @@ class TradingBot:
             self.stock_collector = StockDataCollector(self._settings)
 
         # ---- Feature engineering ----
-        from omnitrade.features.technical import TechnicalFeatures
-        from omnitrade.features.onchain_features import OnChainFeatures
-        from omnitrade.features.sentiment_features import SentimentFeatures
-        from omnitrade.features.macro_features import MacroFeatures
-        from omnitrade.features.feature_selector import FeatureSelector
-
         self.tech_features = TechnicalFeatures(self._settings)
         self.onchain_features = OnChainFeatures(self._settings)
         self.sentiment_features = SentimentFeatures(self._settings)
         self.macro_features = MacroFeatures(self._settings)
-        self.feature_selector = FeatureSelector(self._settings)
 
         # Stock feature pipeline (if stock lane enabled)
         self.stock_feature_pipeline = None
@@ -116,32 +123,21 @@ class TradingBot:
             self.betting_model = ValueBettingModel(self._settings)
 
         # ---- Ensemble ----
-        from omnitrade.ensemble.voting_system import EnsembleVoter
-
         self.ensemble = EnsembleVoter(self._settings)
 
         # ---- Risk & Execution ----
-        from omnitrade.risk.risk_manager import RiskManager
-
         self.risk_manager = RiskManager(self._settings)
 
         # AssetRouter (central dispatcher for all lanes)
-        from omnitrade.execution.asset_router import AssetRouter
-
         self.router = AssetRouter(
             settings=self._settings,
             risk_manager=self.risk_manager,
             mode=mode,
         )
 
-        # Direct executor access for backward compatibility
-        self.executor = self.router.crypto_executor
-        self.stock_executor = self.router.stock_executor
-        self.bet_executor = self.router.bet_executor
-
         # ---- Stock models ----
         self.stock_models = None
-        if "stock" in self._enabled_assets and self.stock_executor:
+        if "stock" in self._enabled_assets and self.router.stock_executor:
             from omnitrade.models.stock_models import StockModelFactory
             self.stock_models = StockModelFactory(self._settings)
 
@@ -151,15 +147,10 @@ class TradingBot:
         self._load_saved_models()
 
         # ---- Monitoring ----
-        from omnitrade.monitoring.telegram_bot import TelegramNotifier
-        from omnitrade.monitoring.health_check import HealthChecker
-
         self.notifier = TelegramNotifier(self._settings)
-        self.health_checker = HealthChecker(self._settings)
+        self.health_checker = HealthChecker(self._settings, notifier=self.notifier)
 
         # ---- Database ----
-        from omnitrade.data.storage.database import MongoDBStorage
-
         self.db = MongoDBStorage(self._settings)
         self.db.connect()
 
@@ -217,15 +208,18 @@ class TradingBot:
         # ── Stock models ──────────────────────────────────────────
         if self.stock_models is not None:
             try:
-                self.stock_models.create_all()
+                self.stock_models.create_xgboost()
                 stock_xgb_path = models_dir / "stock_xgboost_model"
                 if stock_xgb_path.exists():
                     self.stock_models._models["xgboost"].load_model(str(stock_xgb_path))
                     logger.info("Loaded stock XGBoost model")
                 stock_lstm_path = models_dir / "stock_lstm_model"
                 if stock_lstm_path.exists():
-                    self.stock_models._models["lstm"].load_model(str(stock_lstm_path))
-                    logger.info("Loaded stock LSTM model")
+                    try:
+                        self.stock_models._models["lstm"].load_model(str(stock_lstm_path))
+                        logger.info("Loaded stock LSTM model")
+                    except Exception as exc:
+                        logger.warning("Failed to load stock LSTM model: %s", exc)
                 self.stock_models._trained = True
                 logger.info("Stock models loaded from disk")
             except Exception as exc:
@@ -445,17 +439,21 @@ class TradingBot:
 
         # 4. Execute if actionable
         if signal_result["signal"] in ("BUY", "SELL") and signal_result.get("confidence", 0) > 0.5:
-            balance = self.executor.get_balance()
+            crypto_exec = self.router.crypto_executor
+            balance = crypto_exec.get_balance()
             usdt_total = balance.get("USDT", {}).get("total", 0)
             trade_amount = self.risk_manager.calculate_position_size(usdt_total)
 
-            trade_signal = {
-                "symbol": symbol,
-                "side": signal_result["signal"].lower(),
-                "amount": trade_amount,
-            }
+            signal = UnifiedSignal(
+                asset_type=AssetType.CRYPTO,
+                symbol=symbol,
+                side=signal_result["signal"],
+                confidence=signal_result.get("confidence", 0),
+                amount=trade_amount,
+                price=0.0,
+            )
 
-            result = self.executor.execute_trade(trade_signal)
+            result = self.router.route_signal(signal)
 
             if result.get("status") == "filled":
                 await self.notifier.send_trade_alert(result)
@@ -504,7 +502,7 @@ class TradingBot:
         # 4. Execute if actionable
         if signal_result["signal"] in ("BUY", "SELL") and signal_result.get("confidence", 0) > 0.5:
             last_close = float(ohlcv["close"].iloc[-1])
-            balance = self.stock_executor.get_balance() if self.stock_executor else {}
+            balance = self.router.stock_executor.get_balance() if self.router.stock_executor else {}
             usd_total = balance.get("USD", {}).get("total", 10_000)
             trade_amount = self.risk_manager.calculate_position_size(usd_total)
 
@@ -574,8 +572,8 @@ class TradingBot:
                 logger.error("Error processing betting sport %s: %s", sport, exc)
 
         # Log betting stats
-        if self.bet_executor:
-            stats = self.bet_executor.get_stats()
+        if self.router.bet_executor:
+            stats = self.router.bet_executor.get_stats()
             logger.info(
                 "Betting bankroll: $%.2f | Bets: %d | Win: %.1f%% | PnL: $%.2f | ROI: %.1f%%",
                 stats["bankroll"], stats["total_bets"],
@@ -590,14 +588,15 @@ class TradingBot:
 
         # Get current prices for crypto positions
         prices = {}
-        if self.executor:
+        crypto_exec = self.router.crypto_executor
+        if crypto_exec:
             for pos in positions:
                 if pos.get("asset_type") != "crypto":
                     continue
                 symbol = pos.get("symbol", "")
                 if symbol and symbol not in prices:
                     try:
-                        ticker = self.executor._exchange.fetch_ticker(symbol)
+                        ticker = crypto_exec._exchange.fetch_ticker(symbol)
                         prices[symbol] = ticker["last"]
                     except Exception:
                         pass
@@ -613,10 +612,10 @@ class TradingBot:
                 action["action"],
             )
             asset_type_str = action.get("asset_type", "crypto")
-            if asset_type_str == "stock" and self.stock_executor:
-                result = self.stock_executor.close_position(action["symbol"])
-            elif self.executor:
-                result = self.executor.close_position(action["symbol"])
+            if asset_type_str == "stock" and self.router.stock_executor:
+                result = self.router.stock_executor.close_position(action["symbol"])
+            elif crypto_exec:
+                result = crypto_exec.close_position(action["symbol"])
             else:
                 continue
 
@@ -639,10 +638,6 @@ class TradingBot:
 
     def run_backtest(self) -> None:
         """Run backtesting on historical data across all enabled asset lanes."""
-        from omnitrade.backtesting.engine import BacktestEngine
-        from omnitrade.backtesting.walk_forward import WalkForwardValidator
-        from omnitrade.backtesting.overfitting_detector import OverfittingDetector
-
         logger.info("Starting backtesting mode — lanes: %s", self._enabled_assets)
         engine = BacktestEngine(self._settings)
         validator = WalkForwardValidator(self._settings)
@@ -760,6 +755,15 @@ def main() -> None:
         settings.exchange.supported_symbols = args.symbols
     if args.tickers:
         settings.stock.supported_tickers = args.tickers
+
+    # ── Configuration validation ───────────────────────────────────
+    try:
+        warnings_list = settings.validate()
+        for msg in warnings_list:
+            logger.warning("Config: %s", msg)
+    except ValueError as exc:
+        logger.critical("Configuration validation failed:\n%s", exc)
+        sys.exit(1)
 
     bot = TradingBot(mode=args.mode, asset_types=args.asset_types)
 

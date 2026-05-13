@@ -107,6 +107,7 @@ class SentimentAnalyzer:
         self,
         texts: List[str],
         batch_size: int = 32,
+        return_float: bool = True,
     ) -> List[Dict[str, Any]]:
         """Analyse a list of texts in batches for efficiency.
 
@@ -116,6 +117,11 @@ class SentimentAnalyzer:
             Strings to classify.
         batch_size:
             Number of texts per forward pass.
+        return_float:
+            When ``True`` (default), each result dict includes a ``"score"``
+            field which is a normalised float in [-1, 1] suitable for
+            downstream feature engineering.  When ``False``, only the string
+            ``"label"`` and ``"confidence"`` are returned.
 
         Returns
         -------
@@ -154,17 +160,17 @@ class SentimentAnalyzer:
                 label = _LABEL_MAP[predicted_idx]
                 confidence = float(prob_row[predicted_idx])
 
-                # Composite sentiment score in [-1, 1]:
-                #   positive contribution minus negative contribution.
-                score = float(prob_row[0] - prob_row[1])
+                result: Dict[str, Any] = {
+                    "label": label,
+                    "confidence": round(confidence, 4),
+                }
 
-                all_results.append(
-                    {
-                        "label": label,
-                        "score": round(score, 4),
-                        "confidence": round(confidence, 4),
-                    }
-                )
+                # Normalised float score in [-1, 1] for downstream features.
+                if return_float:
+                    score = float(prob_row[0] - prob_row[1])
+                    result["score"] = round(score, 4)
+
+                all_results.append(result)
 
         return all_results
 
@@ -172,7 +178,11 @@ class SentimentAnalyzer:
     # Reddit-specific analysis
     # ------------------------------------------------------------------
 
-    def analyze_reddit_posts(self, posts: List[Dict[str, Any]]) -> pd.DataFrame:
+    def analyze_reddit_posts(
+        self,
+        posts: List[Dict[str, Any]],
+        return_float: bool = True,
+    ) -> pd.DataFrame:
         """Analyse a list of Reddit post dicts.
 
         Each element in *posts* is expected to have at least a ``"text"``
@@ -184,17 +194,25 @@ class SentimentAnalyzer:
         ----------
         posts:
             Sequence of dicts with ``"text"`` and optional ``"timestamp"``.
+        return_float:
+            When ``True`` (default), the ``sentiment`` column contains the
+            normalised float score in [-1, 1] instead of the string label.
+            The string label is always available in the ``label`` column.
 
         Returns
         -------
         pd.DataFrame
-            Columns: ``text``, ``sentiment``, ``score``, ``timestamp``.
+            Columns: ``text``, ``sentiment``, ``score``, ``timestamp``,
+            and ``label`` (when ``return_float=True``).
         """
         if not posts:
-            return pd.DataFrame(columns=["text", "sentiment", "score", "timestamp"])
+            cols = ["text", "sentiment", "score", "timestamp"]
+            if return_float:
+                cols.append("label")
+            return pd.DataFrame(columns=cols)
 
         texts = [p.get("text", "") for p in posts]
-        results = self.analyze_batch(texts)
+        results = self.analyze_batch(texts, return_float=return_float)
 
         rows: List[Dict[str, Any]] = []
         for post, result in zip(posts, results):
@@ -207,14 +225,15 @@ class SentimentAnalyzer:
                 except ValueError:
                     timestamp = datetime.now(tz=timezone.utc)
 
-            rows.append(
-                {
-                    "text": post.get("text", ""),
-                    "sentiment": result["label"],
-                    "score": result["score"],
-                    "timestamp": timestamp,
-                }
-            )
+            row: Dict[str, Any] = {
+                "text": post.get("text", ""),
+                "sentiment": result["score"] if return_float else result["label"],
+                "score": result.get("score", 0.0) if return_float else 0.0,
+                "timestamp": timestamp,
+            }
+            if return_float:
+                row["label"] = result["label"]
+            rows.append(row)
 
         return pd.DataFrame(rows)
 
@@ -222,7 +241,11 @@ class SentimentAnalyzer:
     # News-specific analysis
     # ------------------------------------------------------------------
 
-    def analyze_news(self, articles: List[Dict[str, Any]]) -> pd.DataFrame:
+    def analyze_news(
+        self,
+        articles: List[Dict[str, Any]],
+        return_float: bool = True,
+    ) -> pd.DataFrame:
         """Analyse a list of news article dicts.
 
         Each element is expected to have a ``"title"`` key.  Optional keys:
@@ -233,20 +256,25 @@ class SentimentAnalyzer:
         articles:
             Sequence of dicts with ``"title"`` and optional ``"timestamp"``
             and ``"impact"``.
+        return_float:
+            When ``True`` (default), the ``sentiment`` column contains the
+            normalised float score in [-1, 1] instead of the string label.
+            The string label is always available in the ``label`` column.
 
         Returns
         -------
         pd.DataFrame
             Columns: ``title``, ``sentiment``, ``score``, ``impact``,
-            ``timestamp``.
+            ``timestamp``, and ``label`` (when ``return_float=True``).
         """
         if not articles:
-            return pd.DataFrame(
-                columns=["title", "sentiment", "score", "impact", "timestamp"]
-            )
+            cols = ["title", "sentiment", "score", "impact", "timestamp"]
+            if return_float:
+                cols.append("label")
+            return pd.DataFrame(columns=cols)
 
         titles = [a.get("title", "") for a in articles]
-        results = self.analyze_batch(titles)
+        results = self.analyze_batch(titles, return_float=return_float)
 
         rows: List[Dict[str, Any]] = []
         for article, result in zip(articles, results):
@@ -261,15 +289,16 @@ class SentimentAnalyzer:
 
             impact = article.get("impact", "medium")
 
-            rows.append(
-                {
-                    "title": article.get("title", ""),
-                    "sentiment": result["label"],
-                    "score": result["score"],
-                    "impact": impact,
-                    "timestamp": timestamp,
-                }
-            )
+            row: Dict[str, Any] = {
+                "title": article.get("title", ""),
+                "sentiment": result["score"] if return_float else result["label"],
+                "score": result.get("score", 0.0) if return_float else 0.0,
+                "impact": impact,
+                "timestamp": timestamp,
+            }
+            if return_float:
+                row["label"] = result["label"]
+            rows.append(row)
 
         return pd.DataFrame(rows)
 

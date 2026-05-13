@@ -13,12 +13,13 @@ import numpy as np
 import pandas as pd
 
 from omnitrade.config.settings import Settings
+from omnitrade.features.base import FeaturePipelineBase
 from omnitrade.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class OnChainFeatures:
+class OnChainFeatures(FeaturePipelineBase):
     """Derive ML-ready features from on-chain blockchain data."""
 
     def __init__(self, settings: Settings) -> None:
@@ -236,29 +237,8 @@ class OnChainFeatures:
         """
         frames: List[pd.DataFrame] = []
 
-        try:
-            frames.append(self.compute_whale_pressure(transfers))
-        except Exception as exc:
-            logger.warning("Whale pressure computation failed: %s", exc)
+        FeaturePipelineBase._safe_compute(frames, self.compute_whale_pressure, "Whale pressure", transfers)
+        FeaturePipelineBase._safe_compute(frames, self.compute_exchange_flow_features, "Exchange flow", flows)
+        FeaturePipelineBase._safe_compute(frames, self.compute_network_activity, "Network activity", metrics)
 
-        try:
-            frames.append(self.compute_exchange_flow_features(flows))
-        except Exception as exc:
-            logger.warning("Exchange flow computation failed: %s", exc)
-
-        try:
-            frames.append(self.compute_network_activity(metrics))
-        except Exception as exc:
-            logger.warning("Network activity computation failed: %s", exc)
-
-        if not frames:
-            logger.error("All on-chain feature computations failed")
-            return pd.DataFrame()
-
-        result = pd.concat(frames, axis=1)
-        logger.info(
-            "All on-chain features merged: %d columns, %d rows",
-            result.shape[1],
-            result.shape[0],
-        )
-        return result
+        return FeaturePipelineBase._aggregate(frames, "On-chain")

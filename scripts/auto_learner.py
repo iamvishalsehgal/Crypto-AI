@@ -46,10 +46,10 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from crypto_bot.config.settings import settings
-from crypto_bot.utils.logger import get_logger
+from omnitrade.config.settings import settings
+from omnitrade.utils.logger import get_logger
 
-logger = get_logger("crypto_bot.auto_learner")
+logger = get_logger("omnitrade.auto_learner")
 
 MODELS_DIR = PROJECT_ROOT / "models" / "saved"
 ENSEMBLE_CONFIG_PATH = PROJECT_ROOT / "config" / "ensemble_weights.json"
@@ -66,7 +66,7 @@ def collect_all_data() -> Tuple[Dict[str, pd.DataFrame], Dict[str, Any]]:
 
     Returns (market_data_by_symbol, extra_data).
     """
-    from crypto_bot.data.collectors.market_data import MarketDataCollector
+    from omnitrade.data.collectors.market_data import MarketDataCollector
 
     market = MarketDataCollector(settings)
     symbols = settings.exchange.supported_symbols
@@ -85,7 +85,7 @@ def collect_all_data() -> Tuple[Dict[str, pd.DataFrame], Dict[str, Any]]:
     extra = {}
 
     try:
-        from crypto_bot.data.collectors.sentiment_data import SentimentCollector
+        from omnitrade.data.collectors.sentiment_data import SentimentCollector
         sentiment = SentimentCollector(settings)
         extra["reddit"] = sentiment.fetch_reddit_posts()
         logger.info("Fetched Reddit sentiment data")
@@ -93,7 +93,7 @@ def collect_all_data() -> Tuple[Dict[str, pd.DataFrame], Dict[str, Any]]:
         logger.debug("Reddit data unavailable: %s", exc)
 
     try:
-        from crypto_bot.data.collectors.sentiment_data import SentimentCollector
+        from omnitrade.data.collectors.sentiment_data import SentimentCollector
         sentiment = SentimentCollector(settings)
         extra["news"] = sentiment.fetch_news_articles()
         logger.info("Fetched news data")
@@ -101,7 +101,7 @@ def collect_all_data() -> Tuple[Dict[str, pd.DataFrame], Dict[str, Any]]:
         logger.debug("News data unavailable: %s", exc)
 
     try:
-        from crypto_bot.data.collectors.onchain_data import OnChainCollector
+        from omnitrade.data.collectors.onchain_data import OnChainCollector
         onchain = OnChainCollector(settings)
         extra["whale_transfers"] = onchain.fetch_whale_transfers()
         extra["exchange_flows"] = onchain.fetch_exchange_flows()
@@ -110,7 +110,7 @@ def collect_all_data() -> Tuple[Dict[str, pd.DataFrame], Dict[str, Any]]:
         logger.debug("On-chain data unavailable: %s", exc)
 
     try:
-        from crypto_bot.data.collectors.macro_data import MacroDataCollector
+        from omnitrade.data.collectors.macro_data import MacroDataCollector
         macro = MacroDataCollector(settings)
         extra["macro"] = macro.fetch_all()
         logger.info("Fetched macro data")
@@ -118,7 +118,7 @@ def collect_all_data() -> Tuple[Dict[str, pd.DataFrame], Dict[str, Any]]:
         logger.debug("Macro data unavailable: %s", exc)
 
     try:
-        from crypto_bot.data.collectors.web_scraper import WebScraper
+        from omnitrade.data.collectors.web_scraper import WebScraper
         scraper = WebScraper()
         extra["fear_greed"] = scraper.fetch_fear_greed()
         logger.info("Fetched Fear & Greed index")
@@ -134,7 +134,7 @@ def collect_all_data() -> Tuple[Dict[str, pd.DataFrame], Dict[str, Any]]:
 
 def engineer_features(ohlcv: pd.DataFrame, extra: Dict[str, Any]) -> pd.DataFrame:
     """Compute all available features from market + auxiliary data."""
-    from crypto_bot.features.technical import TechnicalFeatures
+    from omnitrade.features.technical import TechnicalFeatures
 
     tech = TechnicalFeatures(settings)
 
@@ -143,7 +143,7 @@ def engineer_features(ohlcv: pd.DataFrame, extra: Dict[str, Any]) -> pd.DataFram
 
     # Try adding sentiment features
     try:
-        from crypto_bot.features.sentiment_features import SentimentFeatures
+        from omnitrade.features.sentiment_features import SentimentFeatures
         sent_feat = SentimentFeatures(settings)
         sent_df = sent_feat.compute_all()
         if sent_df is not None and not sent_df.empty:
@@ -154,7 +154,7 @@ def engineer_features(ohlcv: pd.DataFrame, extra: Dict[str, Any]) -> pd.DataFram
 
     # Try adding on-chain features
     try:
-        from crypto_bot.features.onchain_features import OnChainFeatures
+        from omnitrade.features.onchain_features import OnChainFeatures
         onchain_feat = OnChainFeatures(settings)
         onchain_df = onchain_feat.compute_all()
         if onchain_df is not None and not onchain_df.empty:
@@ -165,7 +165,7 @@ def engineer_features(ohlcv: pd.DataFrame, extra: Dict[str, Any]) -> pd.DataFram
 
     # Try adding macro features
     try:
-        from crypto_bot.features.macro_features import MacroFeatures
+        from omnitrade.features.macro_features import MacroFeatures
         macro_feat = MacroFeatures(settings)
         macro_df = macro_feat.compute_all()
         if macro_df is not None and not macro_df.empty:
@@ -227,7 +227,7 @@ def train_models(features: pd.DataFrame, epochs: int = 50) -> Dict[str, Tuple[An
     # 1. XGBoost — fast, tabular, always works
     try:
         logger.info("── Training XGBoost ──")
-        from crypto_bot.models.xgboost_model import XGBoostTrader
+        from omnitrade.models.xgboost_model import XGBoostTrader
 
         feature_cols = [c for c in features.columns if c != "signal"]
         n = len(features)
@@ -250,7 +250,7 @@ def train_models(features: pd.DataFrame, epochs: int = 50) -> Dict[str, Tuple[An
     # 2. LSTM — sequence model for time series patterns
     try:
         logger.info("── Training LSTM ──")
-        from crypto_bot.models.training.trainer import ModelTrainer
+        from omnitrade.models.training.trainer import ModelTrainer
 
         trainer = ModelTrainer(settings)
         lstm_model, lstm_metrics = trainer.train_lstm(
@@ -267,7 +267,7 @@ def train_models(features: pd.DataFrame, epochs: int = 50) -> Dict[str, Tuple[An
     # 3. CNN — candlestick pattern recognition
     try:
         logger.info("── Training CNN ──")
-        from crypto_bot.models.cnn_model import CNNTrainer, CandlestickImageGenerator
+        from omnitrade.models.cnn_model import CNNTrainer, CandlestickImageGenerator
 
         img_gen = CandlestickImageGenerator()
         images, labels = img_gen.generate_dataset(features)
@@ -284,7 +284,7 @@ def train_models(features: pd.DataFrame, epochs: int = 50) -> Dict[str, Tuple[An
     # 4. FinBERT sentiment — pre-trained, no training needed
     try:
         logger.info("── Loading FinBERT sentiment ──")
-        from crypto_bot.models.sentiment_model import SentimentAnalyzer
+        from omnitrade.models.sentiment_model import SentimentAnalyzer
 
         finbert = SentimentAnalyzer(settings)
         trained["sentiment"] = (finbert, {"model_type": "finbert", "pretrained": True})
@@ -308,10 +308,6 @@ def calibrate_ensemble(
 
     Models that predict more accurately get higher weights.
     """
-    from crypto_bot.ensemble.voting_system import EnsembleVoter
-
-    voter = EnsembleVoter(settings)
-
     feature_cols = [c for c in features.columns if c != "signal"]
     n = len(features)
     # Use last 20% as evaluation set

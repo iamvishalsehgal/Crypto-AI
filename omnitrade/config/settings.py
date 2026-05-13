@@ -5,9 +5,11 @@ Uses pydantic BaseSettings for validation and automatic environment variable loa
 All settings can be overridden via environment variables or a .env file.
 """
 
-from typing import List, Optional
+import warnings
+from pathlib import Path
+from typing import List, Optional, Tuple
 
-from pydantic import Field, MongoDsn
+from pydantic import Field, MongoDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -323,6 +325,30 @@ class BettingSettings(BaseSettings):
     )
 
 
+class WebScraperSettings(BaseSettings):
+    """Rate-limiting and HTTP configuration for the web scraper."""
+
+    model_config = SettingsConfigDict(env_prefix="SCRAPER_")
+
+    min_delay: float = Field(
+        default=1.0, description="Minimum delay between requests (seconds)"
+    )
+    max_delay: float = Field(
+        default=30.0, description="Maximum delay between requests (seconds)"
+    )
+    timeout: float = Field(
+        default=30.0, description="HTTP request timeout (seconds)"
+    )
+    user_agent: str = Field(
+        default=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        description="Default User-Agent header for HTTP requests",
+    )
+
+
 class AssetSettings(BaseSettings):
     """Global asset class toggles."""
 
@@ -361,7 +387,38 @@ class Settings(BaseSettings):
     stock: StockSettings = Field(default_factory=StockSettings)
     betting: BettingSettings = Field(default_factory=BettingSettings)
     onchain: OnChainSettings = Field(default_factory=OnChainSettings)
+    scraper: WebScraperSettings = Field(default_factory=WebScraperSettings)
     asset: AssetSettings = Field(default_factory=AssetSettings)
+
+    # ── Live-trading safety lock ─────────────────────────────────────────
+    trading_mode: str = Field(
+        default="paper",
+        description="Trading mode: 'paper' or 'live'.  'live' requires "
+        "LIVE_TRADING_CONFIRMED=true to take effect.",
+    )
+    live_trading_confirmed: str = Field(
+        default="false",
+        description="Must be set to 'true' (via LIVE_TRADING_CONFIRMED env var) "
+        "to allow live trading when trading_mode='live'.",
+    )
+
+    @field_validator("trading_mode")
+    @classmethod
+    def validate_trading_mode(cls, v: str) -> str:
+        if v not in ("paper", "live"):
+            raise ValueError(
+                f"TRADING_MODE must be 'paper' or 'live', got {v!r}"
+            )
+        return v
+
+    @field_validator("live_trading_confirmed")
+    @classmethod
+    def validate_live_trading_confirmed(cls, v: str) -> str:
+        if v not in ("true", "false"):
+            raise ValueError(
+                f"LIVE_TRADING_CONFIRMED must be 'true' or 'false', got {v!r}"
+            )
+        return v
 
     def validate_credentials(self) -> List[str]:
         """Validate that required credentials exist for enabled asset classes.
@@ -392,6 +449,116 @@ class Settings(BaseSettings):
                 warnings.append(msg)
 
         return warnings
+
+    def validate(self) -> List[str]:
+        """Validate all configuration values for correctness and safety.
+
+        Checks:
+          - ``exchange.supported_symbols`` is a non-empty list
+          - API credentials for each enabled asset lane (warnings only —
+            paper/sandbox mode works without them)
+          - Data directories exist or can be created
+          - Numerical parameters are in sensible ranges
+          - ``asset.enabled_assets`` contains only valid type names
+
+        Returns:
+            List of warning messages for non-fatal issues (e.g. missing API
+            keys, missing data directories).
+
+        Raises:
+            ValueError: If any required setting is invalid or out of range.
+        """
+        errors: List[str] = []
+        warns: List[str] = []
+
+        # ── 1. Exchange supported_symbols must be a non-empty list ──────
+        if not self.exchange.supported_symbols:
+            errors.append(
+                "EXCHANGE_SUPPORTED_SYMBOLS must be a non-empty list, "
+                f"got {self.exchange.supported_symbols!r}"
+            )
+
+        # ── 2. API credentials per lane (warnings — paper mode is fine) ─
+        enabled = [a.lower() for a in self.asset.enabled_assets]
+
+        if "crypto" in enabled:
+            if not self.exchange.api_key:
+                warns.append(
+                    "Crypto enabled but EXCHANGE_API_KEY is empty — "
+                    "live trading unavailable, paper mode only"
+                )
+            if not self.exchange.api_secret:
+                warns.append(
+                    "Crypto enabled but EXCHANGE_API_SECRET is empty — "
+                    "live trading unavailable, paper mode only"
+                )
+            if (not self.exchange.api_key or not self.exchange.api_secret) \
+                    and not self.exchange.sandbox_mode:
+                warns.append(
+                    "Sandbox mode is disabled but exchange API credentials "
+                    "are missing — live trading will fail"
+                )
+
+        if "stock" in enabled:
+            if not self.stock.alpaca_api_key:
+                warns.append(
+                    "Stock enabled but STOCK_ALPACA_API_KEY is empty — "
+                    "live trading unavailable, paper mode only"
+                )
+
+        if "bet" in enabled:
+            if not self.betting.odds_api_key:
+                warns.append(
+                    "Betting enabled but BETTING_ODDS_API_KEY is empty — "
+                    "data unavailable, paper mode only"
+                )
+
+        # ── 3. Data directories exist or can be created ─────────────────
+        data_dirs: List[Path] = [
+            Path("data"),
+            Path("models") / "saved",
+            Path("reports"),
+        ]
+        for d in data_dirs:
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                warns.append(f"Could not create data directory {d}: {exc}")
+
+        # ── 4. Numerical range validation ───────────────────────────────
+        range_checks: List[Tuple[str, float, float, float]] = [
+            ("TRADING_MAX_POSITION_SIZE",
+             self.trading.max_position_size, 0.0, 1.0),
+            ("TRADING_STOP_LOSS",
+             self.trading.stop_loss, 0.0, 0.5),
+            ("TRADING_TAKE_PROFIT",
+             self.trading.take_profit, 0.0, 1.0),
+            ("TRADING_MAX_DAILY_DRAWDOWN",
+             self.trading.max_daily_drawdown, 0.0, 0.5),
+        ]
+        for name, value, lo, hi in range_checks:
+            if not (lo <= value <= hi):
+                errors.append(
+                    f"{name} must be between {lo} and {hi}, got {value}"
+                )
+
+        # ── 5. Asset types must be valid ────────────────────────────────
+        valid_types = {"crypto", "stock", "bet"}
+        for at in self.asset.enabled_assets:
+            if at not in valid_types:
+                errors.append(
+                    f"ASSET_ENABLED_ASSETS contains invalid type {at!r}. "
+                    f"Must be one of {valid_types}"
+                )
+
+        # ── Report results ──────────────────────────────────────────────
+        if errors:
+            raise ValueError("\n".join(errors))
+
+        for msg in warns:
+            warnings.warn(msg)
+
+        return warns
 
 
 # Module-level singleton -- import this everywhere.

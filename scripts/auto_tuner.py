@@ -40,13 +40,13 @@ from typing import Any, Dict, List, Optional
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from crypto_bot.config.settings import settings
-from crypto_bot.utils.logger import get_logger
-from crypto_bot.data.collectors.market_data import MarketDataCollector
-from crypto_bot.features.technical import TechnicalFeatures
-from crypto_bot.backtesting.engine import BacktestEngine
+from omnitrade.config.settings import settings
+from omnitrade.utils.logger import get_logger
+from omnitrade.data.collectors.market_data import MarketDataCollector
+from omnitrade.features.technical import TechnicalFeatures
+from omnitrade.backtesting.engine import BacktestEngine
 
-logger = get_logger("crypto_bot.auto_tuner")
+logger = get_logger("omnitrade.auto_tuner")
 
 SIGNAL_CONFIG_PATH = PROJECT_ROOT / "config" / "signal_config.json"
 TUNING_LOG_DIR = PROJECT_ROOT / "reports" / "tuning"

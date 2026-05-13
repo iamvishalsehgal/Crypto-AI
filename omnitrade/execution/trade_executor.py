@@ -16,6 +16,7 @@ import ccxt
 import pandas as pd
 
 from omnitrade.config.settings import Settings, settings as _default_settings
+from omnitrade.execution.paper_wallet import PaperWallet
 from omnitrade.risk.risk_manager import PortfolioState, RiskManager
 from omnitrade.utils.logger import get_logger
 
@@ -42,6 +43,24 @@ class TradeExecutor:
         self.risk_manager = risk_manager
         self.paper_mode: bool = self._settings.exchange.sandbox_mode
 
+        # ── Safety lock: enforce trading_mode guard ──────────────────────
+        mode = self._settings.trading_mode
+        if mode == "paper":
+            self.paper_mode = True
+        elif mode == "live":
+            if self._settings.live_trading_confirmed != "true":
+                raise RuntimeError(
+                    "LIVE TRADING MODE requires LIVE_TRADING_CONFIRMED=true. "
+                    "Set this environment variable to acknowledge that you want "
+                    "real orders placed on the exchange."
+                )
+            logger.critical(
+                "!!!!!!!!!! TRADE EXECUTOR INITIALISED IN LIVE MODE — "
+                "REAL ORDERS WILL BE PLACED !!!!!!!!!!"
+            )
+        else:
+            raise RuntimeError(f"Invalid trading_mode: {mode!r}")
+
         # Exchange connection (real or sandbox)
         exchange_class = getattr(ccxt, self._settings.exchange.name, None)
         if exchange_class is None:
@@ -61,15 +80,31 @@ class TradeExecutor:
             logger.info("Trade executor initialised in LIVE mode on %s", self._settings.exchange.name)
 
         # Paper trading state
-        self._paper_balance: Dict[str, float] = {"USDT": 10_000.0}
-        self._paper_positions: List[Dict] = []
-        self._trade_history: List[Dict] = []
+        self._wallet = PaperWallet(
+            initial_balance=10_000.0,
+            base_currency="USDT",
+            fee_rate=self._settings.backtesting.transaction_fee,
+            slippage=self._settings.backtesting.slippage,
+        )
+        self._order_history: List[Dict] = []  # live-mode only
+
+    # ------------------------------------------------------------------
+    # Price helpers for paper mode
+    # ------------------------------------------------------------------
+
+    def _paper_price(self, symbol: str) -> float:
+        """Fetch live ticker price for paper position valuation."""
+        try:
+            ticker = self._exchange.fetch_ticker(symbol)
+            return ticker["last"]
+        except Exception:
+            return 0.0
 
     # ------------------------------------------------------------------
     # Order execution
     # ------------------------------------------------------------------
 
-    def execute_trade(self, signal: Dict) -> Dict:
+    def place_order(self, signal: Dict) -> Dict:
         """Execute a trade signal after risk validation.
 
         Args:
@@ -112,7 +147,8 @@ class TradeExecutor:
                 adjusted_signal["amount"],
             )
 
-        self._trade_history.append(result)
+        if not self.paper_mode:
+            self._order_history.append(result)
         logger.info(
             "Trade EXECUTED: %s %s %.6f %s @ %.2f  [%s]",
             result["side"],
@@ -135,7 +171,12 @@ class TradeExecutor:
             amount_quote: Order size in quote currency.
         """
         if self.paper_mode:
-            return self._simulate_order(symbol, side, amount_quote, order_type="market")
+            try:
+                ticker = self._exchange.fetch_ticker(symbol)
+                price = ticker["ask"] if side == "buy" else ticker["bid"]
+            except Exception:
+                price = 0.0
+            return self._wallet.simulate_order(symbol, side, amount_quote, price, order_type="market")
 
         try:
             ticker = self._exchange.fetch_ticker(symbol)
@@ -159,7 +200,7 @@ class TradeExecutor:
     ) -> Dict:
         """Place a limit order."""
         if self.paper_mode:
-            return self._simulate_order(symbol, side, amount_quote, price=price, order_type="limit")
+            return self._wallet.simulate_order(symbol, side, amount_quote, price, order_type="limit")
 
         try:
             base_amount = amount_quote / price
@@ -209,10 +250,7 @@ class TradeExecutor:
     def get_balance(self) -> Dict[str, Dict[str, float]]:
         """Return account balances keyed by asset."""
         if self.paper_mode:
-            return {
-                asset: {"free": bal, "used": 0.0, "total": bal}
-                for asset, bal in self._paper_balance.items()
-            }
+            return self._wallet.get_balance()
         try:
             raw = self._exchange.fetch_balance()
             return {
@@ -231,20 +269,7 @@ class TradeExecutor:
     def get_positions(self) -> List[Dict]:
         """Return open positions with unrealised PnL."""
         if self.paper_mode:
-            positions = []
-            for pos in self._paper_positions:
-                try:
-                    ticker = self._exchange.fetch_ticker(pos["symbol"])
-                    current = ticker["last"]
-                except Exception:
-                    current = pos["entry_price"]
-
-                pnl = (current - pos["entry_price"]) * pos["base_amount"]
-                if pos["side"] == "sell":
-                    pnl = -pnl
-
-                positions.append({**pos, "current_price": current, "unrealized_pnl": pnl})
-            return positions
+            return self._wallet.get_positions(price_provider=self._paper_price)
         try:
             return self._exchange.fetch_positions()
         except (ccxt.BaseError, AttributeError):
@@ -257,7 +282,12 @@ class TradeExecutor:
     def close_position(self, symbol: str) -> Dict:
         """Close all exposure on *symbol*."""
         if self.paper_mode:
-            return self._paper_close(symbol)
+            try:
+                price = self._paper_price(symbol)
+            except Exception:
+                price = 0.0
+            result = self._wallet.close_position(symbol, price)
+            return result or {"status": "no_position", "symbol": symbol}
 
         positions = self.get_positions()
         target = [p for p in positions if p.get("symbol") == symbol]
@@ -275,12 +305,10 @@ class TradeExecutor:
 
     def close_all_positions(self) -> List[Dict]:
         """Close every open position."""
-        results = []
         if self.paper_mode:
-            for pos in list(self._paper_positions):
-                results.append(self._paper_close(pos["symbol"]))
-            return results
+            return self._wallet.close_all_positions(price_provider=self._paper_price)
 
+        results = []
         for pos in self.get_positions():
             results.append(self.close_position(pos["symbol"]))
         return results
@@ -291,90 +319,11 @@ class TradeExecutor:
 
     def get_trade_history(self) -> pd.DataFrame:
         """Return executed trade history as a DataFrame."""
-        if not self._trade_history:
+        if self.paper_mode:
+            return self._wallet.get_order_history()
+        if not self._order_history:
             return pd.DataFrame()
-        return pd.DataFrame(self._trade_history)
-
-    # ------------------------------------------------------------------
-    # Paper trading helpers
-    # ------------------------------------------------------------------
-
-    def _simulate_order(
-        self,
-        symbol: str,
-        side: str,
-        amount_quote: float,
-        price: Optional[float] = None,
-        order_type: str = "market",
-    ) -> Dict:
-        """Simulate order execution for paper trading."""
-        try:
-            ticker = self._exchange.fetch_ticker(symbol)
-            exec_price = price or (ticker["ask"] if side == "buy" else ticker["bid"])
-        except Exception:
-            exec_price = price or 0.0
-
-        fee_rate = self._settings.backtesting.transaction_fee
-        slippage = self._settings.backtesting.slippage
-
-        if side == "buy":
-            exec_price *= 1 + slippage  # Worse fill for buys
-        else:
-            exec_price *= 1 - slippage  # Worse fill for sells
-
-        base_amount = amount_quote / exec_price if exec_price > 0 else 0.0
-        fee = amount_quote * fee_rate
-        base_asset = symbol.split("/")[0]
-
-        if side == "buy":
-            self._paper_balance["USDT"] = self._paper_balance.get("USDT", 0) - amount_quote - fee
-            self._paper_balance[base_asset] = self._paper_balance.get(base_asset, 0) + base_amount
-            self._paper_positions.append({
-                "id": str(uuid.uuid4())[:8],
-                "symbol": symbol,
-                "side": "buy",
-                "entry_price": exec_price,
-                "base_amount": base_amount,
-                "quote_amount": amount_quote,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-        else:
-            self._paper_balance["USDT"] = self._paper_balance.get("USDT", 0) + amount_quote - fee
-            self._paper_balance[base_asset] = self._paper_balance.get(base_asset, 0) - base_amount
-            # Remove from positions
-            self._paper_positions = [
-                p for p in self._paper_positions if p["symbol"] != symbol
-            ]
-
-        return {
-            "order_id": str(uuid.uuid4())[:12],
-            "symbol": symbol,
-            "side": side,
-            "order_type": order_type,
-            "requested_amount": amount_quote,
-            "filled_amount": base_amount,
-            "price": exec_price,
-            "fee": fee,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "status": "filled",
-            "paper": True,
-        }
-
-    def _paper_close(self, symbol: str) -> Dict:
-        """Close a paper position."""
-        target = [p for p in self._paper_positions if p["symbol"] == symbol]
-        if not target:
-            return {"status": "no_position", "symbol": symbol}
-
-        total_base = sum(p["base_amount"] for p in target)
-        try:
-            ticker = self._exchange.fetch_ticker(symbol)
-            price = ticker["bid"]
-        except Exception:
-            price = target[0]["entry_price"]
-
-        quote_amount = total_base * price
-        return self._simulate_order(symbol, "sell", quote_amount, price=price)
+        return pd.DataFrame(self._order_history)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -417,6 +366,6 @@ class TradeExecutor:
         return PortfolioState(
             balance=usdt,
             equity=equity,
-            open_positions=positions if self.paper_mode else self._paper_positions,
-            daily_pnl=self.risk_manager._daily_pnl,
+            open_positions=positions,
+            daily_pnl=getattr(self.risk_manager, "_daily_pnl", 0.0),
         )

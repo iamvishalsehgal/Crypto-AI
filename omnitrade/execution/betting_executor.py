@@ -19,6 +19,7 @@ from omnitrade.config.settings import Settings, settings as _default_settings
 from omnitrade.config.asset_types import BACK, LAY, PASS, UnifiedSignal
 from omnitrade.risk.risk_manager import PortfolioState
 from omnitrade.utils.logger import get_logger
+from omnitrade.utils.odds import american_to_decimal
 
 logger = get_logger(__name__)
 
@@ -66,7 +67,7 @@ class BettingExecutor:
     # Execution
     # ------------------------------------------------------------------
 
-    def execute_trade(self, signal: UnifiedSignal) -> Dict:
+    def place_order(self, signal: UnifiedSignal) -> Dict:
         """Place a bet from a UnifiedSignal.
 
         Args:
@@ -167,7 +168,7 @@ class BettingExecutor:
 
         odds = bet["odds"]
         stake = bet["stake"]
-        decimal_odds = self._american_to_decimal(odds)
+        decimal_odds = american_to_decimal(odds)
 
         if outcome == "win":
             payout = stake * decimal_odds
@@ -290,10 +291,3 @@ class BettingExecutor:
             daily_pnl=0.0,
         )
 
-    @staticmethod
-    def _american_to_decimal(odds: float) -> float:
-        if odds > 0:
-            return 1.0 + odds / 100.0
-        elif odds < 0:
-            return 1.0 + 100.0 / abs(odds)
-        return 2.0

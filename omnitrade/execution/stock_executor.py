@@ -16,6 +16,7 @@ import pandas as pd
 
 from omnitrade.config.settings import Settings, settings as _default_settings
 from omnitrade.config.asset_types import UnifiedSignal
+from omnitrade.execution.paper_wallet import PaperWallet
 from omnitrade.risk.risk_manager import PortfolioState, RiskManager
 from omnitrade.utils.logger import get_logger
 
@@ -43,10 +44,32 @@ class StockExecutor:
         self._stock = self._settings.stock
         self.paper_mode = self._stock.alpaca_paper
 
-        self._paper_balance = 10_000.0
-        self._paper_positions: List[Dict] = []
-        self._trade_history: List[Dict] = []
-        self._day_trades: List[float] = []  # timestamps for PDT tracking
+        # ── Safety lock: enforce trading_mode guard ──────────────────────
+        mode = self._settings.trading_mode
+        if mode == "paper":
+            self.paper_mode = True
+        elif mode == "live":
+            if self._settings.live_trading_confirmed != "true":
+                raise RuntimeError(
+                    "LIVE TRADING MODE requires LIVE_TRADING_CONFIRMED=true. "
+                    "Set this environment variable to acknowledge that you want "
+                    "real orders placed via Alpaca."
+                )
+            logger.critical(
+                "!!!!!!!!!! STOCK EXECUTOR INITIALISED IN LIVE MODE — "
+                "REAL ORDERS WILL BE PLACED !!!!!!!!!!"
+            )
+        else:
+            raise RuntimeError(f"Invalid trading_mode: {mode!r}")
+
+        self._wallet = PaperWallet(
+            initial_balance=10_000.0,
+            base_currency="USD",
+            fee_rate=0.001,   # 10 bps estimated stock fee
+            slippage=0.0,     # stocks don't have meaningful slippage in paper
+        )
+        self._order_history: List[Dict] = []  # live-mode only
+        self._day_trades: List[float] = []    # timestamps for PDT tracking
         self._alpaca = None
 
         if not self.paper_mode and self._stock.alpaca_api_key:
@@ -76,7 +99,7 @@ class StockExecutor:
     # Order execution
     # ------------------------------------------------------------------
 
-    def execute_trade(self, signal: UnifiedSignal) -> Dict:
+    def place_order(self, signal: UnifiedSignal) -> Dict:
         """Execute a stock trade signal after risk validation.
 
         Args:
@@ -107,16 +130,24 @@ class StockExecutor:
         if self.paper_mode:
             return self._simulate_market_order(signal.symbol, signal.side.lower(), adjusted_amount)
 
-        return self._place_alpaca_market_order(signal.symbol, signal.side.lower(), adjusted_amount, signal.price)
+        result = self._place_alpaca_market_order(signal.symbol, signal.side.lower(), adjusted_amount, signal.price)
+        if result["status"] != "rejected":
+            self._order_history.append(result)
+        return result
+
+    @staticmethod
+    def _stock_price(symbol: str) -> float:
+        """Fetch live stock price via yfinance."""
+        import yfinance as yf
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(period="1d", interval="1m")
+        if hist.empty:
+            raise RuntimeError(f"No price data available for {symbol}")
+        return float(hist["Close"].iloc[-1])
 
     def _simulate_market_order(self, symbol: str, side: str, amount_usd: float) -> Dict:
         try:
-            import yfinance as yf
-            ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="1d", interval="1m")
-            if hist.empty:
-                raise RuntimeError(f"No price data available for {symbol}")
-            price = float(hist["Close"].iloc[-1])
+            price = self._stock_price(symbol)
         except Exception as exc:
             logger.error("Cannot fetch price for %s: %s", symbol, exc)
             return {
@@ -125,42 +156,10 @@ class StockExecutor:
                 "reason": f"Price fetch failed: {exc}",
             }
 
-        fee = amount_usd * 0.001  # 10 bps estimated
-        shares = amount_usd / price if price > 0 else 0
-
-        order_id = str(uuid.uuid4())[:12]
-
+        result = self._wallet.simulate_order(symbol, side, amount_usd, price, order_type="market")
         if side == "buy":
-            self._paper_balance -= amount_usd + fee
-            self._paper_positions.append({
-                "id": order_id,
-                "symbol": symbol,
-                "side": "buy",
-                "entry_price": price,
-                "shares": shares,
-                "amount_usd": amount_usd,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
             self._day_trades.append(time.time())
-        else:
-            self._paper_balance += amount_usd - fee
-            self._paper_positions = [p for p in self._paper_positions if p["symbol"] != symbol]
-
-        result = {
-            "order_id": order_id,
-            "symbol": symbol,
-            "side": side,
-            "order_type": "market",
-            "requested_amount": amount_usd,
-            "filled_amount": shares,
-            "price": price,
-            "fee": fee,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "status": "filled",
-            "paper": True,
-        }
-        self._trade_history.append(result)
-        logger.info("Paper stock trade: %s %s %s shares @ $%.2f", side, symbol, shares, price)
+        logger.info("Paper stock trade: %s %s %.6f shares @ $%.2f", side, symbol, result["filled_amount"], price)
         return result
 
     def _place_alpaca_market_order(self, symbol: str, side: str, amount_usd: float, price: float) -> Dict:
@@ -193,7 +192,6 @@ class StockExecutor:
                 "status": order.status,
                 "paper": self.paper_mode,
             }
-            self._trade_history.append(result)
             return result
         except Exception as exc:
             logger.error("Alpaca order failed: %s", exc)
@@ -205,7 +203,7 @@ class StockExecutor:
 
     def get_balance(self) -> Dict[str, Dict[str, float]]:
         if self.paper_mode:
-            return {"USD": {"free": self._paper_balance, "used": 0.0, "total": self._paper_balance}}
+            return self._wallet.get_balance()
 
         if self._alpaca is None:
             return {"USD": {"free": 0, "used": 0, "total": 0}}
@@ -225,19 +223,7 @@ class StockExecutor:
 
     def get_positions(self) -> List[Dict]:
         if self.paper_mode:
-            positions = []
-            for pos in self._paper_positions:
-                try:
-                    import yfinance as yf
-                    ticker = yf.Ticker(pos["symbol"])
-                    hist = ticker.history(period="1d", interval="1m")
-                    current = float(hist["Close"].iloc[-1]) if not hist.empty else pos["entry_price"]
-                except Exception:
-                    current = pos["entry_price"]
-
-                pnl = (current - pos["entry_price"]) * pos["shares"]
-                positions.append({**pos, "current_price": current, "unrealized_pnl": pnl})
-            return positions
+            return self._wallet.get_positions(price_provider=self._stock_price)
 
         if self._alpaca is None:
             return []
@@ -262,19 +248,12 @@ class StockExecutor:
 
     def close_position(self, symbol: str) -> Dict:
         if self.paper_mode:
-            target = [p for p in self._paper_positions if p["symbol"] == symbol]
-            if not target:
-                return {"status": "no_position", "symbol": symbol}
-            pos = target[0]
             try:
-                import yfinance as yf
-                ticker = yf.Ticker(symbol)
-                hist = ticker.history(period="1d", interval="1m")
-                price = float(hist["Close"].iloc[-1]) if not hist.empty else pos["entry_price"]
+                price = self._stock_price(symbol)
             except Exception:
-                price = pos["entry_price"]
-            amount = pos["shares"] * price
-            return self._simulate_market_order(symbol, "sell", amount)
+                price = 0.0
+            result = self._wallet.close_position(symbol, price)
+            return result or {"status": "no_position", "symbol": symbol}
 
         if self._alpaca is None:
             return {"status": "error", "reason": "Alpaca not connected", "symbol": symbol}
@@ -288,10 +267,7 @@ class StockExecutor:
 
     def close_all_positions(self) -> List[Dict]:
         if self.paper_mode:
-            results = []
-            for pos in list(self._paper_positions):
-                results.append(self.close_position(pos["symbol"]))
-            return results
+            return self._wallet.close_all_positions(price_provider=self._stock_price)
 
         if self._alpaca is None:
             return []
@@ -324,9 +300,11 @@ class StockExecutor:
         return False
 
     def get_trade_history(self) -> pd.DataFrame:
-        if not self._trade_history:
+        if self.paper_mode:
+            return self._wallet.get_order_history()
+        if not self._order_history:
             return pd.DataFrame()
-        return pd.DataFrame(self._trade_history)
+        return pd.DataFrame(self._order_history)
 
     def _get_portfolio_state(self) -> PortfolioState:
         balance = self.get_balance()

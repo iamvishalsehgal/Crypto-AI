@@ -1,6 +1,9 @@
 """
-Stock-specific model wrappers reusing existing LSTM, XGBoost, and CNN
-architectures trained on stock features (technicals + fundamentals).
+Stock-specific model factory wrapping existing LSTM, XGBoost architectures
+trained on stock features (technicals + fundamentals).
+
+Delegates ensemble voting to :class:`EnsembleVoter` — this module is a
+pure factory + trainer, not a voting engine.
 """
 
 from __future__ import annotations
@@ -16,25 +19,29 @@ from omnitrade.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Canonical integer-to-signal mapping used by model adapters.
+_INT_TO_SIGNAL: Dict[int, str] = {-1: "SELL", 0: "HOLD", 1: "BUY"}
+
 
 class StockModelFactory:
-    """Creates and manages stock-specific model instances.
+    """Creates and trains stock-specific model instances.
 
-    Wraps the existing LSTM, XGBoost, and CNN architectures. Models trained
-    on stock data (technicals + fundamentals) produce BUY/SELL/HOLD signals.
+    Wraps existing LSTM and XGBoost architectures. Models produce
+    BUY/SELL/HOLD signals via :class:`EnsembleVoter` weighted voting.
     """
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._models: Dict[str, Any] = {}
         self._trained = False
+        self._voter = EnsembleVoter(settings)
 
     def create_xgboost(self) -> Any:
-        """Create an XGBoost classifier configured for stock signals."""
         try:
             from omnitrade.models.xgboost_model import XGBoostTrader
             model = XGBoostTrader(self._settings)
             self._models["xgboost"] = model
+            self._voter.register_model("xgboost", _xgboost_adapter(model), weight=1.0)
             logger.info("Stock XGBoost model created")
             return model
         except ImportError as exc:
@@ -42,11 +49,11 @@ class StockModelFactory:
             return None
 
     def create_lstm(self) -> Any:
-        """Create an LSTM model for stock time-series classification."""
         try:
             from omnitrade.models.lstm_model import LSTMTrainer
             trainer = LSTMTrainer(self._settings)
             self._models["lstm"] = trainer
+            self._voter.register_model("lstm", _lstm_adapter(trainer), weight=1.0)
             logger.info("Stock LSTM model created")
             return trainer
         except ImportError as exc:
@@ -77,7 +84,6 @@ class StockModelFactory:
         metrics: Dict[str, Any] = {}
         valid_models = 0
 
-        # Train/val split (chronological — no shuffle)
         n = len(features)
         split_idx = int(n * 0.80)
         X_train = features.iloc[:split_idx]
@@ -89,7 +95,7 @@ class StockModelFactory:
             try:
                 model = self._models["xgboost"]
                 model.train(X_train, y_train, X_val, y_val)
-                acc = self._evaluate(model, features, labels)
+                acc = _evaluate(model, features, labels)
                 metrics["xgboost"] = {"accuracy": acc}
                 valid_models += 1
                 logger.info("Stock XGBoost trained — accuracy=%.3f", acc)
@@ -117,80 +123,97 @@ class StockModelFactory:
         return metrics
 
     def predict(self, features: pd.DataFrame) -> Dict[str, Any]:
-        """Generate predictions from all trained models and ensemble them.
+        """Generate ensemble prediction via :class:`EnsembleVoter`.
 
-        Returns:
-            Dict with ``signal``, ``confidence``, and per-model predictions.
+        Delegates entirely to the voter — no duplicated voting logic.
         """
         if not self._trained:
             return {"signal": "HOLD", "confidence": 0.0, "reason": "Models not trained"}
 
-        predictions: Dict[str, int] = {}
-        confidences: Dict[str, float] = {}
-        votes = {"BUY": 0, "SELL": 0, "HOLD": 0}
+        return self._voter.vote({"features": features})
 
-        for name, model in self._models.items():
-            try:
-                if name == "xgboost":
-                    pred, proba = self._predict_xgboost(model, features)
-                elif name == "lstm":
-                    pred, proba = self._predict_lstm(model, features)
-                else:
-                    continue
-
-                label = {0: "HOLD", 1: "BUY", -1: "SELL"}.get(pred, "HOLD")
-                predictions[name] = label
-                confidences[name] = proba
-                votes[label] += 1
-            except Exception as exc:
-                logger.warning("Prediction failed for %s: %s", name, exc)
-
-        total_votes = sum(votes.values()) or 1
-        best = max(votes, key=votes.get)
-        confidence = votes[best] / total_votes
-
-        return {
-            "signal": best,
-            "confidence": round(confidence, 3),
-            "individual_predictions": predictions,
-            "individual_confidences": confidences,
-        }
-
-    @staticmethod
-    def _predict_xgboost(model: Any, features: pd.DataFrame) -> tuple:
-        row = features.iloc[[-1]] if not features.empty else features
-        proba = model.predict_proba(row)
-        if hasattr(proba, "iloc"):
-            proba = proba.iloc[0].values
-        pred = int(np.argmax(proba))
-        # XGBoost uses {0,1,2} mapping to {SELL,HOLD,BUY}
-        mapped = {0: -1, 1: 0, 2: 1}.get(pred, 0)
-        return mapped, float(max(proba))
-
-    @staticmethod
-    def _predict_lstm(trainer: Any, features: pd.DataFrame) -> tuple:
-        try:
-            proba = trainer.predict(features)
-            if hasattr(proba, "iloc"):
-                proba = proba.iloc[-1].values if len(proba.shape) > 1 else proba.values
-            pred = int(np.argmax(proba))
-            mapped = {0: -1, 1: 0, 2: 1}.get(pred, 0)
-            return mapped, float(max(proba))
-        except AttributeError:
-            return 0, 0.0
-
-    @staticmethod
-    def _evaluate(model: Any, features: pd.DataFrame, labels: pd.Series) -> float:
-        try:
-            pred = model.predict(features)
-            if hasattr(pred, "values"):
-                pred = pred.values
-            labels_arr = labels.values if hasattr(labels, "values") else labels
-            # XGBoost internal mapping: assume accuracy comparison
-            return float((pred == labels_arr).mean())
-        except Exception:
-            return 0.0
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
 
     @property
     def is_trained(self) -> bool:
         return self._trained
+
+    @property
+    def voter(self) -> EnsembleVoter:
+        """The underlying :class:`EnsembleVoter` used for stock voting."""
+        return self._voter
+
+
+# =====================================================================
+# Model adapters — wrap raw model APIs to satisfy EnsembleVoter's
+# `predict(features) -> str` interface.
+# =====================================================================
+
+
+class _XGBoostStockAdapter:
+    """Wraps XGBoostTrader for the stock ensemble voter.
+
+    Receives a DataFrame directly — the voter unwraps ``{"features": df}``
+    before calling ``predict()``.
+    """
+
+    __slots__ = ("_model",)
+
+    def __init__(self, model: Any) -> None:
+        self._model = model
+
+    def predict(self, df: pd.DataFrame) -> str:
+        numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+        df = df[numeric_cols]
+        row = df.iloc[[-1]] if not df.empty else df
+        proba = self._model.predict_proba(row)
+        if hasattr(proba, "iloc"):
+            proba = proba.iloc[0].values
+        pred = int(np.argmax(proba))
+        mapped = {0: -1, 1: 0, 2: 1}.get(pred, 0)
+        return _INT_TO_SIGNAL.get(mapped, "HOLD")
+
+
+class _LSTMStockAdapter:
+    """Wraps LSTMTrainer for the stock ensemble voter.
+
+    Receives a DataFrame directly — the voter unwraps ``{"features": df}``
+    before calling ``predict()``.
+    """
+
+    __slots__ = ("_trainer",)
+
+    def __init__(self, trainer: Any) -> None:
+        self._trainer = trainer
+
+    def predict(self, df: pd.DataFrame) -> str:
+        try:
+            proba = self._trainer.predict(df)
+            if hasattr(proba, "iloc"):
+                proba = proba.iloc[-1].values if len(proba.shape) > 1 else proba.values
+            pred = int(np.argmax(proba))
+            mapped = {0: -1, 1: 0, 2: 1}.get(pred, 0)
+            return _INT_TO_SIGNAL.get(mapped, "HOLD")
+        except AttributeError:
+            return "HOLD"
+
+
+def _xgboost_adapter(model: Any) -> _XGBoostStockAdapter:
+    return _XGBoostStockAdapter(model)
+
+
+def _lstm_adapter(trainer: Any) -> _LSTMStockAdapter:
+    return _LSTMStockAdapter(trainer)
+
+
+def _evaluate(model: Any, features: pd.DataFrame, labels: pd.Series) -> float:
+    try:
+        pred = model.predict(features)
+        if hasattr(pred, "values"):
+            pred = pred.values
+        labels_arr = labels.values if hasattr(labels, "values") else labels
+        return float((pred == labels_arr).mean())
+    except Exception:
+        return 0.0

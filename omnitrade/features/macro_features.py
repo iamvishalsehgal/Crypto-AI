@@ -13,12 +13,13 @@ import numpy as np
 import pandas as pd
 
 from omnitrade.config.settings import Settings
+from omnitrade.features.base import FeaturePipelineBase
 from omnitrade.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class MacroFeatures:
+class MacroFeatures(FeaturePipelineBase):
     """Derive ML-ready features from macroeconomic data sources."""
 
     def __init__(self, settings: Settings) -> None:
@@ -286,34 +287,9 @@ class MacroFeatures:
         """
         frames: List[pd.DataFrame] = []
 
-        try:
-            frames.append(self.compute_rate_features(fed))
-        except Exception as exc:
-            logger.warning("Rate feature computation failed: %s", exc)
+        FeaturePipelineBase._safe_compute(frames, self.compute_rate_features, "Rate features", fed)
+        FeaturePipelineBase._safe_compute(frames, self.compute_volatility_features, "Volatility features", vix)
+        FeaturePipelineBase._safe_compute(frames, self.compute_dollar_features, "Dollar features", dxy)
+        FeaturePipelineBase._safe_compute(frames, self.compute_commodity_features, "Commodity features", gold, oil)
 
-        try:
-            frames.append(self.compute_volatility_features(vix))
-        except Exception as exc:
-            logger.warning("Volatility feature computation failed: %s", exc)
-
-        try:
-            frames.append(self.compute_dollar_features(dxy))
-        except Exception as exc:
-            logger.warning("Dollar feature computation failed: %s", exc)
-
-        try:
-            frames.append(self.compute_commodity_features(gold, oil))
-        except Exception as exc:
-            logger.warning("Commodity feature computation failed: %s", exc)
-
-        if not frames:
-            logger.error("All macro feature computations failed")
-            return pd.DataFrame()
-
-        result = pd.concat(frames, axis=1)
-        logger.info(
-            "All macro features merged: %d columns, %d rows",
-            result.shape[1],
-            result.shape[0],
-        )
-        return result
+        return FeaturePipelineBase._aggregate(frames, "Macro")

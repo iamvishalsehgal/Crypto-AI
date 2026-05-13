@@ -156,9 +156,9 @@ class AssetRouter:
         if signal.asset_type == AssetType.CRYPTO:
             return self._route_crypto(signal, executor)
         elif signal.asset_type == AssetType.STOCK:
-            return executor.execute_trade(signal)
+            return executor.place_order(signal)
         elif signal.asset_type == AssetType.BET:
-            return executor.execute_trade(signal)
+            return executor.place_order(signal)
 
         return {"order_id": None, "status": "unknown_asset_type", "symbol": signal.symbol}
 
@@ -168,7 +168,7 @@ class AssetRouter:
             "side": signal.side.lower(),
             "amount": signal.amount,
         }
-        return executor.execute_trade(trade_signal)
+        return executor.place_order(trade_signal)
 
     # ------------------------------------------------------------------
     # Unified reporting

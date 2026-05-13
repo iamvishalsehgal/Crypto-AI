@@ -11,8 +11,9 @@ Runs the trading pipeline in a continuous loop with:
 - --test mode for fast dry-run validation
 
 Usage:
-    python scripts/auto_trader.py                         # Run forever (paper)
-    python scripts/auto_trader.py --test                  # Quick 3-cycle test
+    python scripts/auto_trader.py                         # Run forever (paper, default)
+    python scripts/auto_trader.py --test                  # Quick 3-cycle test (forces paper)
+    python scripts/auto_trader.py --live                  # Live trading (requires env setup)
     python scripts/auto_trader.py --cycles 50             # Run 50 cycles
     python scripts/auto_trader.py --commit-interval 30    # Commit every 30 min
 """
@@ -29,8 +30,7 @@ import subprocess
 import sys
 import time
 import traceback
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -49,6 +49,9 @@ from omnitrade.risk.risk_manager import RiskManager
 from omnitrade.risk.safety import SafetyGuard
 from omnitrade.execution.trade_executor import TradeExecutor
 from omnitrade.execution.asset_router import AssetRouter
+from omnitrade.backtesting.engine import BacktestEngine
+from omnitrade.utils.circuit_breaker import CircuitBreaker
+from omnitrade.utils.pnl_tracker import PnLTracker, Trade
 
 logger = get_logger("omnitrade.auto_trader")
 
@@ -68,6 +71,11 @@ RETRAIN_INTERVALS = {
 # Disk space threshold (%), warn below this
 DISK_MIN_FREE_PCT = 10.0
 DISK_MIN_FREE_GB = 1.0
+
+# Backtest defaults
+BACKTEST_STARTING_BALANCE = 10_000.0
+BACKTEST_POSITION_SIZE_PCT = 0.10
+BACKTEST_MIN_CONFIDENCE = 0.45
 
 
 def ensure_dirs() -> None:
@@ -128,139 +136,6 @@ def retry(max_attempts: int = 3, delay: float = 2.0, backoff: float = 2.0):
             raise last_exc  # type: ignore[misc]
         return wrapper
     return decorator
-
-
-# =====================================================================
-# Circuit breaker
-# =====================================================================
-
-class CircuitBreaker:
-    """Trips after *threshold* consecutive failures within *window* seconds."""
-
-    def __init__(self, threshold: int = 5, cooldown: int = 300) -> None:
-        self.threshold = threshold
-        self.cooldown = cooldown  # seconds to wait after tripping
-        self._failures: int = 0
-        self._tripped_at: Optional[float] = None
-
-    @property
-    def is_open(self) -> bool:
-        if self._tripped_at is None:
-            return False
-        if time.time() - self._tripped_at > self.cooldown:
-            self.reset()
-            logger.info("Circuit breaker reset after cooldown")
-            return False
-        return True
-
-    def record_failure(self) -> None:
-        self._failures += 1
-        if self._failures >= self.threshold:
-            self._tripped_at = time.time()
-            logger.critical(
-                "CIRCUIT BREAKER TRIPPED after %d failures — pausing for %ds",
-                self._failures, self.cooldown,
-            )
-
-    def record_success(self) -> None:
-        self._failures = 0
-
-    def reset(self) -> None:
-        self._failures = 0
-        self._tripped_at = None
-
-
-# =====================================================================
-# P&L Tracker
-# =====================================================================
-
-@dataclass
-class Trade:
-    trade_id: str
-    symbol: str
-    side: str
-    entry_price: float
-    amount: float
-    timestamp: str
-    exit_price: Optional[float] = None
-    exit_timestamp: Optional[str] = None
-    pnl: float = 0.0
-    pnl_pct: float = 0.0
-    status: str = "open"
-
-
-class PnLTracker:
-    """Tracks every trade from open to close, computes real P&L."""
-
-    def __init__(self, initial_balance: float = 10_000.0) -> None:
-        self.initial_balance = initial_balance
-        self.trades: List[Trade] = []
-        self.closed_trades: List[Trade] = []
-        self._peak_equity: float = initial_balance
-
-    def record_entry(self, trade_result: dict) -> None:
-        t = Trade(
-            trade_id=trade_result.get("order_id", "?"),
-            symbol=trade_result["symbol"],
-            side=trade_result["side"],
-            entry_price=trade_result.get("price", 0),
-            amount=trade_result.get("filled_amount", 0),
-            timestamp=trade_result.get("timestamp", ""),
-        )
-        self.trades.append(t)
-
-    def record_exit(self, symbol: str, exit_price: float) -> Optional[Trade]:
-        for t in reversed(self.trades):
-            if t.symbol == symbol and t.status == "open":
-                t.exit_price = exit_price
-                t.exit_timestamp = datetime.now(timezone.utc).isoformat()
-                if t.side == "buy":
-                    t.pnl = (exit_price - t.entry_price) * t.amount
-                else:
-                    t.pnl = (t.entry_price - exit_price) * t.amount
-                t.pnl_pct = t.pnl / (t.entry_price * t.amount) * 100 if t.entry_price else 0
-                t.status = "closed"
-                self.closed_trades.append(t)
-                return t
-        return None
-
-    @property
-    def total_pnl(self) -> float:
-        return sum(t.pnl for t in self.closed_trades)
-
-    @property
-    def win_rate(self) -> float:
-        if not self.closed_trades:
-            return 0.0
-        wins = sum(1 for t in self.closed_trades if t.pnl > 0)
-        return wins / len(self.closed_trades) * 100
-
-    @property
-    def open_count(self) -> int:
-        return sum(1 for t in self.trades if t.status == "open")
-
-    def summary(self) -> dict:
-        total_closed = len(self.closed_trades)
-        wins = [t for t in self.closed_trades if t.pnl > 0]
-        losses = [t for t in self.closed_trades if t.pnl <= 0]
-        avg_win = sum(t.pnl for t in wins) / len(wins) if wins else 0
-        avg_loss = sum(t.pnl for t in losses) / len(losses) if losses else 0
-
-        return {
-            "total_trades": len(self.trades),
-            "closed_trades": total_closed,
-            "open_trades": self.open_count,
-            "total_pnl": round(self.total_pnl, 2),
-            "win_rate_pct": round(self.win_rate, 1),
-            "avg_win": round(avg_win, 2),
-            "avg_loss": round(avg_loss, 2),
-            "profit_factor": round(
-                abs(sum(t.pnl for t in wins) / sum(t.pnl for t in losses))
-                if losses and sum(t.pnl for t in losses) != 0 else 0, 2
-            ),
-            "best_trade": round(max((t.pnl for t in self.closed_trades), default=0), 2),
-            "worst_trade": round(min((t.pnl for t in self.closed_trades), default=0), 2),
-        }
 
 
 # =====================================================================
@@ -329,12 +204,12 @@ def write_daily_summary(stats: dict) -> None:
         json.dump(stats, f, indent=2, default=str)
 
 
-def write_status_file(cycle: int, portfolio: dict, signals: dict, pnl: dict) -> None:
+def write_status_file(cycle: int, portfolio: dict, signals: dict, pnl: dict, mode: str = "paper") -> None:
     path = REPORTS_DIR / "status.json"
     data = {
         "last_updated": datetime.now(timezone.utc).isoformat(),
         "cycle": cycle,
-        "mode": "paper",
+        "mode": mode,
         "portfolio": portfolio,
         "pnl_summary": pnl,
         "last_signals": signals,
@@ -477,23 +352,214 @@ class SignalGenerator:
 
 
 # =====================================================================
+# Backtest helpers
+# =====================================================================
+
+
+def make_strategy(tech: TechnicalFeatures):
+    """Build a backtest strategy function using the existing SignalGenerator.
+
+    For each candle, computes technical features and generates a signal.
+    BUY signals open long positions; SELL signals close the position.
+    Returns ``None`` (no action) for HOLD signals or when confidence is too low.
+
+    Parameters
+    ----------
+    tech:
+        Initialised TechnicalFeatures instance for indicator computation.
+
+    Returns
+    -------
+    Callable
+        ``strategy(data, idx) -> dict | None`` compatible with
+        ``BacktestEngine.run()``.
+    """
+
+    def strategy(data: pd.DataFrame, idx: int):
+        if idx < 60:  # need enough warm-up candles for indicators
+            return None
+        window = data.iloc[max(0, idx - 499): idx + 1]
+        try:
+            features = tech.compute_all(window).dropna()
+        except Exception:
+            return None
+        if features.empty or len(features) < 2:
+            return None
+
+        latest = features.iloc[-1].to_dict()
+        prev = features.iloc[-2].to_dict()
+        sig = SignalGenerator.generate(latest, prev)
+
+        if sig["signal"] == "BUY" and sig["confidence"] >= BACKTEST_MIN_CONFIDENCE:
+            price = float(data["close"].iloc[idx])
+            amount = BACKTEST_STARTING_BALANCE * BACKTEST_POSITION_SIZE_PCT / price
+            return {"side": "buy", "amount": amount}
+        elif sig["signal"] == "SELL" and sig["confidence"] >= BACKTEST_MIN_CONFIDENCE:
+            return {"side": "close"}
+        return None
+
+    return strategy
+
+
+def print_backtest_results(symbol_results: Dict[str, dict]) -> None:
+    """Print a formatted backtest results table to the console."""
+    print("\n" + "=" * 48)
+    print(f"{'Symbol':<12} {'Return%':<9} {'Sharpe':<8} {'MaxDD%':<9} {'Trades':<8} {'Win%':<6}")
+    print("-" * 48)
+    for symbol, r in symbol_results.items():
+        ret = r["total_return"]
+        ret_str = f"+{ret:.2f}" if ret >= 0 else f"{ret:.2f}"
+        print(
+            f"{symbol:<12} {ret_str:<9} {r['sharpe_ratio']:<8.2f} "
+            f"{r['max_drawdown']:<9.2f} {r['total_trades']:<8} {r['win_rate']:<6.1f}"
+        )
+    print("=" * 48)
+
+
+def run_backtest(
+    symbols: List[str],
+    backtest_days: int = 90,
+    initial_balance: float = BACKTEST_STARTING_BALANCE,
+) -> Dict[str, dict]:
+    """Run a backtest across all specified symbols and return results.
+
+    For each symbol:
+      1. Fetch historical OHLCV data
+      2. Compute technical features per candle
+      3. Generate BUY/SELL/HOLD signals using SignalGenerator
+      4. Simulate trades via BacktestEngine
+      5. Collect performance metrics
+
+    Results are printed to console and saved to
+    ``reports/backtest_YYYY-MM-DD.json``.
+
+    Parameters
+    ----------
+    symbols:
+        Trading symbols to backtest (e.g. ``["BTC/USDT", "ETH/USDT"]``).
+    backtest_days:
+        Days of historical data to fetch (default 90).
+    initial_balance:
+        Starting portfolio balance for each symbol run.
+
+    Returns
+    -------
+    dict[str, dict]
+        Mapping of symbol -> result dict with all key performance metrics.
+    """
+    market = MarketDataCollector(settings)
+    tech = TechnicalFeatures(settings)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # Use daily timeframe for longer backtests, hourly for shorter ones
+    if backtest_days <= 40:
+        timeframe = "1h"
+        limit = min(1000, backtest_days * 24 + 500)
+    else:
+        timeframe = "1d"
+        limit = backtest_days + 100
+
+    symbol_results: Dict[str, dict] = {}
+
+    for symbol in symbols:
+        logger.info("Backtesting %s (%dd of %s data)...", symbol, backtest_days, timeframe)
+
+        since_ms = int(
+            (datetime.now(timezone.utc) - timedelta(days=backtest_days + 10)).timestamp() * 1000
+        )
+        try:
+            ohlcv = market.fetch_ohlcv(symbol, timeframe=timeframe, since=since_ms, limit=limit)
+        except Exception as exc:
+            logger.error("Failed to fetch data for %s: %s", symbol, exc)
+            continue
+
+        if ohlcv.empty or len(ohlcv) < 100:
+            logger.warning("Insufficient data for %s (%d rows), skipping", symbol, len(ohlcv))
+            continue
+
+        engine = BacktestEngine(settings, initial_balance=initial_balance)
+        strategy = make_strategy(tech)
+        result = engine.run(strategy, ohlcv)
+
+        symbol_results[symbol] = {
+            "symbol": symbol,
+            "total_return": round(result.total_return * 100, 2),
+            "sharpe_ratio": round(result.sharpe_ratio, 2),
+            "max_drawdown": round(result.max_drawdown * 100, 2),
+            "win_rate": round(result.win_rate * 100, 1),
+            "total_trades": result.total_trades,
+            "avg_trade_return": round(result.avg_trade_return, 2),
+            "profit_factor": round(result.profit_factor, 2),
+            "calmar_ratio": round(result.calmar_ratio, 2),
+            "initial_balance": initial_balance,
+            "timeframe": timeframe,
+        }
+
+        logger.info(
+            "  %s → return=%.2f%%  sharpe=%.2f  maxDD=%.2f%%  trades=%d  win=%.1f%%",
+            symbol,
+            symbol_results[symbol]["total_return"],
+            result.sharpe_ratio,
+            symbol_results[symbol]["max_drawdown"],
+            result.total_trades,
+            symbol_results[symbol]["win_rate"],
+        )
+
+    # Print formatted summary table
+    print_backtest_results(symbol_results)
+
+    # Save report to disk
+    report_path = REPORTS_DIR / f"backtest_{today}.json"
+    report_data = {
+        "date": today,
+        "backtest_days": backtest_days,
+        "initial_balance": initial_balance,
+        "timeframe": timeframe,
+        "results": symbol_results,
+        "summary": {
+            "symbols_tested": len(symbol_results),
+            "avg_return": round(
+                sum(r["total_return"] for r in symbol_results.values()) / max(len(symbol_results), 1),
+                2,
+            ),
+            "avg_sharpe": round(
+                sum(r["sharpe_ratio"] for r in symbol_results.values()) / max(len(symbol_results), 1),
+                2,
+            ),
+            "total_trades": sum(r["total_trades"] for r in symbol_results.values()),
+        },
+    }
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    with open(report_path, "w") as f:
+        json.dump(report_data, f, indent=2, default=str)
+    logger.info("Backtest report saved to %s", report_path)
+
+    return symbol_results
+
+
+# =====================================================================
 # Auto Trader (main class)
 # =====================================================================
 
 class AutoTrader:
-    def __init__(self, asset_types: Optional[List[str]] = None) -> None:
+    def __init__(
+        self,
+        asset_types: Optional[List[str]] = None,
+        mode: str = "paper",
+    ) -> None:
         self._asset_types = asset_types or settings.asset.enabled_assets
+        self._mode = mode
         self.has_crypto = "crypto" in self._asset_types
         self.has_stock = "stock" in self._asset_types
         self.has_bet = "bet" in self._asset_types
 
         self.market = MarketDataCollector(settings) if self.has_crypto else None
         self.tech = TechnicalFeatures(settings)
-        self.risk = RiskManager(settings)
         self.safety = SafetyGuard(settings)
+        self.risk = RiskManager(settings, safety=self.safety)
 
         # AssetRouter as central dispatcher
-        self.router = AssetRouter(settings=settings, risk_manager=self.risk, mode="paper")
+        self.router = AssetRouter(settings=settings, risk_manager=self.risk, mode=self._mode)
         self.executor = self.router.crypto_executor
 
         # Stock components
@@ -789,7 +855,7 @@ class AutoTrader:
                     for w in verdict.warnings:
                         logger.warning("  SAFETY WARNING: %s", w)
 
-                trade = self.executor.execute_trade({
+                trade = self.executor.place_order({
                     "symbol": symbol,
                     "side": sig["signal"].lower(),
                     "amount": final_size,
@@ -1089,7 +1155,11 @@ class AutoTrader:
 def main() -> None:
     parser = argparse.ArgumentParser(description="OmniTrade AI — Autonomous Multi-Asset Trader")
     parser.add_argument("--test", action="store_true",
-                        help="Quick 3-cycle test with 10s intervals, no git push")
+                        help="Quick 3-cycle test with 10s intervals, no git push (forces paper)")
+    parser.add_argument("--live", action="store_true",
+                        help="Enable live trading. Requires TRADING_MODE=live and "
+                        "LIVE_TRADING_CONFIRMED=true in environment. "
+                        "Without this flag, paper mode is enforced regardless of env vars.")
     parser.add_argument("--cycles", type=int, default=0,
                         help="Max cycles (0 = infinite)")
     parser.add_argument("--interval", type=int, default=60,
@@ -1103,13 +1173,50 @@ def main() -> None:
     parser.add_argument("--asset-types", nargs="+", choices=["crypto", "stock", "bet"],
                         default=None,
                         help="Asset classes to trade (default: all enabled in config)")
+    parser.add_argument("--backtest", action="store_true",
+                        help="Run backtest on startup, print results, then exit")
+    parser.add_argument("--backtest-and-trade", action="store_true",
+                        help="Run backtest on startup, print results, then continue to live trading")
+    parser.add_argument("--backtest-symbols", nargs="+", default=None,
+                        help="Symbols to backtest (default: all supported crypto symbols)")
+    parser.add_argument("--backtest-days", type=int, default=90,
+                        help="Days of historical data for backtest (default: 90)")
     args = parser.parse_args()
 
-    # Test mode overrides
+    # ── Test mode overrides ─────────────────────────────────────────
     if args.test:
         args.cycles = 3
         args.interval = 10
         args.commit_interval = 9999  # don't push during test
+
+    # ── Trading mode resolution ─────────────────────────────────────
+    # --test forces paper regardless of env vars.
+    # --live allows the env var setting to take effect; without it, paper is enforced.
+    # (This mutates the module-level singleton before any executor is constructed.)
+    if args.test:
+        effective_mode = "paper"
+    elif args.live:
+        effective_mode = settings.trading_mode
+        if effective_mode != "live":
+            logger.critical(
+                "--live flag requires TRADING_MODE=live environment variable "
+                "(current value: %s).  Aborting.",
+                effective_mode,
+            )
+            sys.exit(1)
+        # Ensure LIVE_TRADING_CONFIRMED is set — executors will validate this,
+        # but fail early here for a better user experience.
+        if settings.live_trading_confirmed != "true":
+            logger.critical(
+                "--live flag requires LIVE_TRADING_CONFIRMED=true environment "
+                "variable.  Aborting."
+            )
+            sys.exit(1)
+    else:
+        effective_mode = "paper"
+
+    # Override the module-level singleton so executors pick up the right mode.
+    settings.trading_mode = effective_mode
 
     ensure_dirs()
     setup_log_rotation()
@@ -1122,7 +1229,8 @@ def main() -> None:
     has_bet = "bet" in asset_types
 
     logger.info("=" * 60)
-    logger.info("  OMNITRADE AI — Autonomous Trader%s", " (TEST MODE)" if args.test else "")
+    logger.info("  OMNITRADE AI — Autonomous Trader%s",
+                " (TEST MODE)" if args.test else "")
     logger.info("  Lanes   : %s", ", ".join(asset_types))
     if has_crypto:
         logger.info("  Crypto  : %s", ", ".join(symbols))
@@ -1131,10 +1239,52 @@ def main() -> None:
     if has_bet:
         logger.info("  Betting : %s", ", ".join(settings.betting.supported_sports))
     logger.info("  Interval: %ds | Commit: every %dm", args.interval, args.commit_interval)
-    logger.info("  Mode    : PAPER (sandbox)")
+    logger.info("  Mode    : %s",
+                "LIVE" if effective_mode == "live" else "PAPER")
     logger.info("=" * 60)
 
-    trader = AutoTrader(asset_types=asset_types)
+    # ── Live trading warning & countdown ────────────────────────────
+    if effective_mode == "live":
+        logger.critical("=" * 60)
+        logger.critical(
+            "  LIVE TRADING MODE — REAL ORDERS WILL BE PLACED ON "
+            "THE EXCHANGE"
+        )
+        logger.critical("  Press Ctrl-C within 3 seconds to abort...")
+        logger.critical("=" * 60)
+        for i in range(3, 0, -1):
+            logger.critical("  %d...", i)
+            time.sleep(1)
+        logger.critical("  Starting live trading.")
+
+    # ── Configuration validation ───────────────────────────────────
+    try:
+        warnings_list = settings.validate()
+        for msg in warnings_list:
+            logger.warning("Config: %s", msg)
+    except ValueError as exc:
+        logger.critical("Configuration validation failed:\n%s", exc)
+        sys.exit(1)
+
+    # ── Backtest mode ─────────────────────────────────────────────────
+    if args.backtest or args.backtest_and_trade:
+        logger.info("=" * 60)
+        logger.info("  BACKTEST MODE — Running historical simulation")
+        logger.info("  Days: %d | Symbols: %s", args.backtest_days,
+                     ", ".join(args.backtest_symbols or symbols))
+        logger.info("=" * 60)
+
+        bt_symbols = args.backtest_symbols or symbols
+        bt_results = run_backtest(
+            symbols=bt_symbols,
+            backtest_days=args.backtest_days,
+        )
+
+        if not args.backtest_and_trade:
+            logger.info("Backtest complete. Exiting.")
+            sys.exit(0)
+
+    trader = AutoTrader(asset_types=asset_types, mode=effective_mode)
     last_commit = time.time()
     cycle = 0
     errors_this_session = 0
@@ -1232,7 +1382,7 @@ def main() -> None:
             )
 
             # Write reports
-            write_status_file(cycle, portfolio, signals, pnl_summary)
+            write_status_file(cycle, portfolio, signals, pnl_summary, mode=effective_mode)
             write_daily_summary({
                 "cycle": cycle,
                 "timestamp": datetime.now(timezone.utc).isoformat(),

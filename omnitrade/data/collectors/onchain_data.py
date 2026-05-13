@@ -14,38 +14,10 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 
 from omnitrade.config.settings import Settings
+from omnitrade.utils.cache import TTLCache
 from omnitrade.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-# ---------------------------------------------------------------------------
-# Simple TTL cache
-# ---------------------------------------------------------------------------
-
-class _TTLCache:
-    """Minimalist in-memory cache with per-key time-to-live."""
-
-    def __init__(self, default_ttl: float = 300.0) -> None:
-        self._store: Dict[str, tuple[float, Any]] = {}
-        self._default_ttl = default_ttl
-
-    def get(self, key: str) -> Optional[Any]:
-        entry = self._store.get(key)
-        if entry is None:
-            return None
-        expires_at, value = entry
-        if time.monotonic() > expires_at:
-            del self._store[key]
-            return None
-        return value
-
-    def set(self, key: str, value: Any, ttl: Optional[float] = None) -> None:
-        ttl = ttl if ttl is not None else self._default_ttl
-        self._store[key] = (time.monotonic() + ttl, value)
-
-    def invalidate(self, key: str) -> None:
-        self._store.pop(key, None)
-
 
 # ---------------------------------------------------------------------------
 # Rate limiter (token-bucket style, async-friendly)
@@ -101,7 +73,7 @@ class OnChainCollector:
         self._glassnode_key: str = settings.onchain.glassnode_api_key
         self._etherscan_key: str = settings.onchain.etherscan_api_key
 
-        self._cache = _TTLCache(default_ttl=_CACHE_MEDIUM)
+        self._cache = TTLCache(default_ttl=_CACHE_MEDIUM)
         self._limiter = _AsyncRateLimiter(
             calls_per_second=settings.onchain.rate_limit_calls_per_sec
         )

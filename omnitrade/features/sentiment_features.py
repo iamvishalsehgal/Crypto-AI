@@ -13,12 +13,14 @@ import numpy as np
 import pandas as pd
 
 from omnitrade.config.settings import Settings
+from omnitrade.features.base import FeaturePipelineBase
 from omnitrade.utils.logger import get_logger
+from omnitrade.utils.sentiment import sentiment_label_to_float
 
 logger = get_logger(__name__)
 
 
-class SentimentFeatures:
+class SentimentFeatures(FeaturePipelineBase):
     """Derive ML-ready features from sentiment data sources."""
 
     def __init__(self, settings: Settings) -> None:
@@ -46,6 +48,24 @@ class SentimentFeatures:
         df = df.sort_values(time_col).set_index(time_col)
         return df
 
+    @staticmethod
+    def normalize_sentiment(value: Any) -> float:
+        """Convert a sentiment value of any format to a normalised float in [-1, 1].
+
+        Delegates to :func:`omnitrade.utils.sentiment.sentiment_label_to_float`.
+
+        Parameters
+        ----------
+        value:
+            A float score, integer, or string label (e.g. ``"positive"``).
+
+        Returns
+        -------
+        float
+            Sentiment score in [-1, 1].
+        """
+        return sentiment_label_to_float(value)
+
     # ------------------------------------------------------------------
     # Reddit
     # ------------------------------------------------------------------
@@ -71,7 +91,8 @@ class SentimentFeatures:
             if col not in df.columns:
                 raise ValueError(f"Reddit posts missing required column: {col}")
 
-        df["sentiment"] = pd.to_numeric(df["sentiment"], errors="coerce").fillna(0)
+        # Normalise sentiment — handles float scores *and* string labels.
+        df["sentiment"] = df["sentiment"].apply(self.normalize_sentiment).astype(float)
         df["score"] = pd.to_numeric(df["score"], errors="coerce").fillna(0)
 
         # Daily aggregation
@@ -124,7 +145,8 @@ class SentimentFeatures:
             if col not in df.columns:
                 raise ValueError(f"Tweets missing required column: {col}")
 
-        df["sentiment"] = pd.to_numeric(df["sentiment"], errors="coerce").fillna(0)
+        # Normalise sentiment — handles float scores *and* string labels.
+        df["sentiment"] = df["sentiment"].apply(self.normalize_sentiment).astype(float)
         df["likes"] = pd.to_numeric(df["likes"], errors="coerce").fillna(0)
         df["retweets"] = pd.to_numeric(df["retweets"], errors="coerce").fillna(0)
         df["engagement"] = df["likes"] + df["retweets"]
@@ -176,7 +198,8 @@ class SentimentFeatures:
             if col not in df.columns:
                 raise ValueError(f"News articles missing required column: {col}")
 
-        df["sentiment"] = pd.to_numeric(df["sentiment"], errors="coerce").fillna(0)
+        # Normalise sentiment — handles float scores *and* string labels.
+        df["sentiment"] = df["sentiment"].apply(self.normalize_sentiment).astype(float)
         df["relevance"] = pd.to_numeric(df["relevance"], errors="coerce").fillna(0)
 
         # Impact score weights sentiment by relevance
@@ -275,34 +298,9 @@ class SentimentFeatures:
         """
         frames: List[pd.DataFrame] = []
 
-        try:
-            frames.append(self.compute_reddit_features(reddit))
-        except Exception as exc:
-            logger.warning("Reddit feature computation failed: %s", exc)
+        FeaturePipelineBase._safe_compute(frames, self.compute_reddit_features, "Reddit features", reddit)
+        FeaturePipelineBase._safe_compute(frames, self.compute_twitter_features, "Twitter features", twitter)
+        FeaturePipelineBase._safe_compute(frames, self.compute_news_features, "News features", news)
+        FeaturePipelineBase._safe_compute(frames, self.compute_fear_greed_features, "Fear & Greed features", fear_greed)
 
-        try:
-            frames.append(self.compute_twitter_features(twitter))
-        except Exception as exc:
-            logger.warning("Twitter feature computation failed: %s", exc)
-
-        try:
-            frames.append(self.compute_news_features(news))
-        except Exception as exc:
-            logger.warning("News feature computation failed: %s", exc)
-
-        try:
-            frames.append(self.compute_fear_greed_features(fear_greed))
-        except Exception as exc:
-            logger.warning("Fear & Greed feature computation failed: %s", exc)
-
-        if not frames:
-            logger.error("All sentiment feature computations failed")
-            return pd.DataFrame()
-
-        result = pd.concat(frames, axis=1)
-        logger.info(
-            "All sentiment features merged: %d columns, %d rows",
-            result.shape[1],
-            result.shape[0],
-        )
-        return result
+        return FeaturePipelineBase._aggregate(frames, "Sentiment")

@@ -12,6 +12,7 @@ import numpy as np
 
 from omnitrade.config.settings import BettingSettings, Settings
 from omnitrade.utils.logger import get_logger
+from omnitrade.utils.odds import american_to_decimal
 
 logger = get_logger(__name__)
 
@@ -156,7 +157,7 @@ class BettingRiskManager:
                 risk_score=0.5,
             )
 
-        odds_decimal = self._american_to_decimal(odds_american)
+        odds_decimal = american_to_decimal(odds_american)
         full_kelly = self.kelly_stake(bankroll, model_prob, odds_decimal)
         stake = self.adjusted_stake(full_kelly, bankroll)
 
@@ -236,10 +237,3 @@ class BettingRiskManager:
     def is_halted(self) -> bool:
         return self._halted
 
-    @staticmethod
-    def _american_to_decimal(odds: float) -> float:
-        if odds > 0:
-            return 1.0 + odds / 100.0
-        elif odds < 0:
-            return 1.0 + 100.0 / abs(odds)
-        return 2.0

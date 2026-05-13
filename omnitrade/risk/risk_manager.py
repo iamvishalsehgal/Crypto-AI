@@ -48,11 +48,20 @@ class RiskManager:
     shrink position sizes, reject trades entirely, and trigger an emergency
     shutdown when the daily drawdown limit is breached.
 
+    When *safety* is provided (a :class:`~omnitrade.risk.safety.SafetyGuard`),
+    halt state is delegated to it — eliminating the dual-halt problem where
+    ``RiskManager`` and ``SafetyGuard`` could independently block trades.
+
     Args:
         settings: Bot settings (uses ``trading.*`` parameters).
+        safety: Optional :class:`SafetyGuard` for shared halt authority.
     """
 
-    def __init__(self, settings: Optional[Settings] = None) -> None:
+    def __init__(
+        self,
+        settings: Optional[Settings] = None,
+        safety: Optional[Any] = None,
+    ) -> None:
         self._settings = settings or _default_settings
         t = self._settings.trading
 
@@ -62,11 +71,14 @@ class RiskManager:
         self.max_daily_drawdown: float = t.max_daily_drawdown
         self.max_open_trades: int = t.max_open_trades
 
+        # Shared halt authority (optional, eliminates dual-halt)
+        self._safety = safety
+
         # Internal state
         self._daily_start_equity: float = 0.0
         self._daily_pnl: float = 0.0
-        self._trading_halted: bool = False
-        self._halt_reason: str = ""
+        self._own_trading_halted: bool = False  # only used when _safety is None
+        self._own_halt_reason: str = ""
         self._trailing_stops: Dict[str, float] = {}
 
         # Adaptive sizing: rolling 30-period return tracker
@@ -74,6 +86,37 @@ class RiskManager:
         self._adaptive_multiplier: float = 1.0
         self._adaptive_min: float = 0.5
         self._adaptive_max: float = 1.2
+
+    # ------------------------------------------------------------------
+    # Halt delegation
+    # ------------------------------------------------------------------
+
+    @property
+    def _trading_halted(self) -> bool:
+        """Halt flag — delegates to SafetyGuard when wired."""
+        if self._safety is not None:
+            return self._safety.is_halted
+        return self._own_trading_halted
+
+    @_trading_halted.setter
+    def _trading_halted(self, value: bool) -> None:
+        if self._safety is not None:
+            # Don't directly set — halt goes through SafetyGuard._halt()
+            return
+        self._own_trading_halted = value
+
+    @property
+    def _halt_reason(self) -> str:
+        """Halt reason — delegates to SafetyGuard when wired."""
+        if self._safety is not None:
+            return getattr(self._safety, "_halt_reason", "")
+        return self._own_halt_reason
+
+    @_halt_reason.setter
+    def _halt_reason(self, value: str) -> None:
+        if self._safety is not None:
+            return
+        self._own_halt_reason = value
 
     # ------------------------------------------------------------------
     # Position sizing
@@ -285,12 +328,16 @@ class RiskManager:
         """
         drawdown = -daily_pnl / portfolio_value if portfolio_value > 0 else 0.0
         if drawdown >= self.max_daily_drawdown:
-            self._trading_halted = True
-            self._halt_reason = (
+            reason = (
                 f"Daily drawdown {drawdown:.2%} exceeds limit "
                 f"{self.max_daily_drawdown:.0%}"
             )
-            logger.critical("EMERGENCY HALT: %s", self._halt_reason)
+            if self._safety is not None:
+                self._safety._halt("Daily drawdown", drawdown)
+            else:
+                self._trading_halted = True
+                self._halt_reason = reason
+            logger.critical("EMERGENCY HALT: %s", reason)
             return True
         return False
 
@@ -443,8 +490,11 @@ class RiskManager:
         """Reset daily counters (call at the start of each trading day)."""
         self._daily_start_equity = starting_equity
         self._daily_pnl = 0.0
-        self._trading_halted = False
-        self._halt_reason = ""
+        if self._safety is not None:
+            self._safety.reset_daily()
+        else:
+            self._trading_halted = False
+            self._halt_reason = ""
         logger.info("Daily risk counters reset.  Starting equity: %.2f", starting_equity)
 
     def clear_trailing_stop(self, position_id: str) -> None:

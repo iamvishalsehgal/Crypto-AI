@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from omnitrade.config.settings import Settings
+from omnitrade.utils.cache import TTLCache
 from omnitrade.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -31,38 +32,6 @@ _SERIES = {
 
 # Cache TTL in seconds -- macro data rarely changes intraday
 _CACHE_TTL = 3600  # 1 hour
-
-
-# ---------------------------------------------------------------------------
-# Simple TTL cache (same pattern as onchain_data)
-# ---------------------------------------------------------------------------
-
-class _TTLCache:
-    """Minimalist in-memory cache with per-key time-to-live."""
-
-    def __init__(self, default_ttl: float = _CACHE_TTL) -> None:
-        self._store: Dict[str, tuple[float, Any]] = {}
-        self._default_ttl = default_ttl
-
-    def get(self, key: str) -> Optional[Any]:
-        entry = self._store.get(key)
-        if entry is None:
-            return None
-        expires_at, value = entry
-        if time.monotonic() > expires_at:
-            del self._store[key]
-            return None
-        return value
-
-    def set(self, key: str, value: Any, ttl: Optional[float] = None) -> None:
-        ttl = ttl if ttl is not None else self._default_ttl
-        self._store[key] = (time.monotonic() + ttl, value)
-
-    def invalidate(self, key: str) -> None:
-        self._store.pop(key, None)
-
-    def clear(self) -> None:
-        self._store.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +55,7 @@ class MacroDataCollector:
         self._fred_api_key: str = settings.data.fred_api_key
 
         self._fred = None  # lazy init
-        self._cache = _TTLCache(default_ttl=_CACHE_TTL)
+        self._cache = TTLCache(default_ttl=_CACHE_TTL)
 
         logger.info("MacroDataCollector initialised")
 

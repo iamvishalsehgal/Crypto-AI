@@ -85,13 +85,9 @@ class WebScraper:
                 SCRAPER_TIMEOUT    -- HTTP timeout in seconds.
         """
         self._settings = settings
-        self._min_delay = float(
-            getattr(settings, "SCRAPER_MIN_DELAY", _MIN_DELAY_S)
-        )
-        self._max_delay = float(
-            getattr(settings, "SCRAPER_MAX_DELAY", _MAX_DELAY_S)
-        )
-        self._timeout = float(getattr(settings, "SCRAPER_TIMEOUT", 30))
+        self._min_delay = float(settings.scraper.min_delay)
+        self._max_delay = float(settings.scraper.max_delay)
+        self._timeout = float(settings.scraper.timeout)
 
         self._session: Optional[aiohttp.ClientSession] = None
         self._last_request_time: float = 0.0

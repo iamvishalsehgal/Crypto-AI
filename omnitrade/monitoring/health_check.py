@@ -34,17 +34,18 @@ class HealthChecker:
     background, sending Telegram alerts when something goes wrong.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, notifier: Optional[TelegramNotifier] = None) -> None:
         """
         Initialise the health checker.
 
         Args:
-            settings: Application settings (used for intervals and to create
-                      the :class:`TelegramNotifier`).
+            settings: Application settings (used for intervals).
+            notifier: Optional existing TelegramNotifier to reuse. If not
+                      provided a new one is created.
         """
         self._settings = settings
         self._interval: int = settings.monitoring.health_check_interval
-        self._notifier = TelegramNotifier(settings)
+        self._notifier = notifier or TelegramNotifier(settings)
         self._monitor_task: Optional[asyncio.Task[None]] = None
         self._running: bool = False
         self._last_status: str = "healthy"
