@@ -1,0 +1,40 @@
+{
+  "date": "2026-05-13",
+  "backtest_days": 30,
+  "initial_balance": 10000.0,
+  "timeframe": "1h",
+  "results": {
+    "BTC/USDT": {
+      "symbol": "BTC/USDT",
+      "total_return": -10.04,
+      "sharpe_ratio": -1.59,
+      "max_drawdown": 10.04,
+      "win_rate": 0.0,
+      "total_trades": 1,
+      "avg_trade_return": 0.0,
+      "profit_factor": 0.0,
+      "calmar_ratio": 9.91,
+      "initial_balance": 10000.0,
+      "timeframe": "1h"
+    },
+    "ETH/USDT": {
+      "symbol": "ETH/USDT",
+      "total_return": -80.24,
+      "sharpe_ratio": -3.89,
+      "max_drawdown": 80.25,
+      "win_rate": 0.0,
+      "total_trades": 8,
+      "avg_trade_return": 0.0,
+      "profit_factor": 0.0,
+      "calmar_ratio": 1.25,
+      "initial_balance": 10000.0,
+      "timeframe": "1h"
+    }
+  },
+  "summary": {
+    "symbols_tested": 2,
+    "avg_return": -45.14,
+    "avg_sharpe": -2.74,
+    "total_trades": 9
+  }
+}
