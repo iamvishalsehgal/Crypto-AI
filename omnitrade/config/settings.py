@@ -46,6 +46,16 @@ class DatabaseSettings(BaseSettings):
         default=5000, description="Server selection timeout in milliseconds"
     )
 
+    def model_post_init(self, __context):
+        """Warn when using default MongoDB URI without authentication."""
+        if self.uri == "mongodb://localhost:27017":
+            import logging
+            logging.getLogger(__name__).warning(
+                "MongoDB URI is the default (mongodb://localhost:27017) — "
+                "no authentication configured. Set DB_URI to a secured "
+                "MongoDB Atlas or authenticated replica set for production use."
+            )
+
 
 class TradingSettings(BaseSettings):
     """Risk and position management parameters."""

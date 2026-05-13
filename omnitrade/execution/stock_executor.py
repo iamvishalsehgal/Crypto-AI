@@ -16,6 +16,7 @@ import pandas as pd
 
 from omnitrade.config.settings import Settings, settings as _default_settings
 from omnitrade.config.asset_types import UnifiedSignal
+from omnitrade.execution.mode_guard import validate_trading_mode
 from omnitrade.execution.paper_wallet import PaperWallet
 from omnitrade.risk.risk_manager import PortfolioState, RiskManager
 from omnitrade.utils.logger import get_logger
@@ -42,25 +43,8 @@ class StockExecutor:
         self._settings = settings or _default_settings
         self.risk_manager = risk_manager
         self._stock = self._settings.stock
-        self.paper_mode = self._stock.alpaca_paper
-
         # ── Safety lock: enforce trading_mode guard ──────────────────────
-        mode = self._settings.trading_mode
-        if mode == "paper":
-            self.paper_mode = True
-        elif mode == "live":
-            if self._settings.live_trading_confirmed != "true":
-                raise RuntimeError(
-                    "LIVE TRADING MODE requires LIVE_TRADING_CONFIRMED=true. "
-                    "Set this environment variable to acknowledge that you want "
-                    "real orders placed via Alpaca."
-                )
-            logger.critical(
-                "!!!!!!!!!! STOCK EXECUTOR INITIALISED IN LIVE MODE — "
-                "REAL ORDERS WILL BE PLACED !!!!!!!!!!"
-            )
-        else:
-            raise RuntimeError(f"Invalid trading_mode: {mode!r}")
+        self.paper_mode = validate_trading_mode(self._settings)
 
         self._wallet = PaperWallet(
             initial_balance=10_000.0,

@@ -440,7 +440,11 @@ class LSTMTrainer:
         if not path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {path}")
 
-        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+        # SECURITY: weights_only=True prevents arbitrary code execution via
+        # malicious pickle data. If loading legacy models saved with full pickle
+        # objects (e.g., custom scaler classes), this may fail. Re-save with
+        # weights_only=True or migrate the scaler to a serializable format.
+        checkpoint = torch.load(path, map_location=self.device, weights_only=True)
 
         self.model_type = checkpoint["model_type"]
         self.hidden_size = checkpoint["hidden_size"]

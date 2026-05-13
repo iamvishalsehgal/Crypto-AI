@@ -36,16 +36,10 @@ import pandas as pd
 from omnitrade.config.settings import Settings, settings
 from omnitrade.config.asset_types import AssetType, UnifiedSignal
 from omnitrade.data.collectors.market_data import MarketDataCollector
-from omnitrade.data.collectors.onchain_data import OnChainCollector
-from omnitrade.data.collectors.sentiment_data import SentimentCollector
-from omnitrade.data.collectors.macro_data import MacroDataCollector
 from omnitrade.data.storage.database import MongoDBStorage
 from omnitrade.ensemble.voting_system import EnsembleVoter
 from omnitrade.execution.asset_router import AssetRouter
 from omnitrade.features.technical import TechnicalFeatures
-from omnitrade.features.onchain_features import OnChainFeatures
-from omnitrade.features.sentiment_features import SentimentFeatures
-from omnitrade.features.macro_features import MacroFeatures
 from omnitrade.monitoring.telegram_bot import TelegramNotifier
 from omnitrade.monitoring.health_check import HealthChecker
 from omnitrade.risk.risk_manager import RiskManager
@@ -88,9 +82,6 @@ class TradingBot:
 
         # ---- Data collectors ----
         self.market_collector = MarketDataCollector(self._settings)
-        self.onchain_collector = OnChainCollector(self._settings)
-        self.sentiment_collector = SentimentCollector(self._settings)
-        self.macro_collector = MacroDataCollector(self._settings)
 
         # Stock data collector (if stock lane enabled)
         self.stock_collector = None
@@ -100,9 +91,6 @@ class TradingBot:
 
         # ---- Feature engineering ----
         self.tech_features = TechnicalFeatures(self._settings)
-        self.onchain_features = OnChainFeatures(self._settings)
-        self.sentiment_features = SentimentFeatures(self._settings)
-        self.macro_features = MacroFeatures(self._settings)
 
         # Stock feature pipeline (if stock lane enabled)
         self.stock_feature_pipeline = None
@@ -162,8 +150,6 @@ class TradingBot:
 
     def _load_saved_models(self) -> None:
         """Load trained models from disk for all enabled lanes."""
-        from pathlib import Path
-
         project_root = Path(__file__).resolve().parent.parent
         models_dir = project_root / "models" / "saved"
 

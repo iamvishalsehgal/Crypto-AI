@@ -226,6 +226,10 @@ class LightGBMTrader:
         if not path.exists():
             raise FileNotFoundError(f"Model file not found: {path}")
 
+        # SECURITY WARNING: joblib.load uses pickle internally and can execute
+        # arbitrary code. Only load models from trusted, hardcoded paths (e.g.,
+        # PROJECT_ROOT / "models" / "saved" / "*.pkl"). Never load user-supplied
+        # or network-sourced model files.
         # Try joblib first (full sklearn wrapper), fall back to booster text file
         try:
             self._model = joblib.load(str(path))

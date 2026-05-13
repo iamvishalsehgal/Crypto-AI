@@ -35,10 +35,12 @@ class AssetRouter:
         settings: Optional[Settings] = None,
         risk_manager: Optional[Any] = None,
         mode: str = "paper",
+        safety: Optional[Any] = None,
     ) -> None:
         self._settings = settings or _default_settings
         self._mode = mode
         self._risk_manager = risk_manager
+        self._safety = safety
         self._enabled: List[AssetType] = []
         self._executors: Dict[AssetType, Any] = {}
         self._lane_status: Dict[AssetType, str] = {}
@@ -114,7 +116,7 @@ class AssetRouter:
             from omnitrade.execution.betting_executor import BettingExecutor
             from omnitrade.risk.betting_risk import BettingRiskManager
 
-            rm = BettingRiskManager(self._settings)
+            rm = BettingRiskManager(self._settings, safety=self._safety)
             executor = BettingExecutor(settings=self._settings, risk_manager=rm)
             self._executors[AssetType.BET] = executor
             self._enabled.append(AssetType.BET)

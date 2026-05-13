@@ -235,7 +235,7 @@ class EnsembleVoter:
         self,
         vote_result: Dict[str, Any],
         min_confidence: float = 0.6,
-        min_agree: int = 4,
+        min_agree: Optional[int] = None,
     ) -> bool:
         """Decide whether the ensemble vote is strong enough to execute.
 
@@ -247,7 +247,9 @@ class EnsembleVoter:
             Minimum confidence score required.
         min_agree:
             Minimum number of models that must agree on the winning
-            signal.
+            signal.  When ``None`` (default) it is computed dynamically
+            as ``max(2, len(registered_models) // 2 + 1)`` so that cold
+            start with few models does not block all signals.
 
         Returns
         -------
@@ -255,6 +257,9 @@ class EnsembleVoter:
             ``True`` if the signal is not ``HOLD``, confidence meets the
             threshold, and enough models agree.
         """
+        if min_agree is None:
+            min_agree = max(2, len(self._models) // 2 + 1)
+
         signal = vote_result.get("signal", _HOLD)
         confidence = vote_result.get("confidence", 0.0)
         predictions = vote_result.get("individual_predictions", {})

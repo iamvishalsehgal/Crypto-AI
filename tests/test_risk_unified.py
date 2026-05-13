@@ -41,7 +41,7 @@ def test_unified_halt_delegation():
     rm = RiskManager(settings, safety=sg)
     assert not rm._trading_halted
     # Halt via SafetyGuard
-    sg._halt("test halt", "reason")
+    sg.halt("test halt", "reason")
     assert sg.is_halted
     assert rm._trading_halted  # delegates to sg.is_halted
     assert "test halt" in rm._halt_reason
@@ -65,7 +65,7 @@ def test_unified_reset():
     settings = Settings()
     sg = SafetyGuard(settings)
     rm = RiskManager(settings, safety=sg)
-    sg._halt("before reset", None)
+    sg.halt("before reset", None)
     assert sg.is_halted
     rm.reset_daily(1000)
     assert not sg.is_halted
@@ -91,7 +91,7 @@ def test_validate_trade_respects_unified_halt():
     settings = Settings()
     sg = SafetyGuard(settings)
     rm = RiskManager(settings, safety=sg)
-    sg._halt("unified halt", "test")
+    sg.halt("unified halt", "test")
     result = rm.validate_trade(
         {"symbol": "BTC/USDT", "side": "buy", "amount": 100},
         PortfolioState(balance=1000, equity=1000),

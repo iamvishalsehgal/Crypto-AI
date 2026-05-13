@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from typing import Any
+
 from omnitrade.config.settings import BettingSettings, Settings
 from omnitrade.utils.logger import get_logger
 from omnitrade.utils.odds import american_to_decimal
@@ -39,16 +41,53 @@ class BettingRiskManager:
     - Fractional Kelly application
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, safety: Optional[Any] = None) -> None:
         self._settings = settings
         self._betting: BettingSettings = settings.betting
         self._consecutive_losses = 0
         self._daily_stakes_count = 0
         self._daily_stake_total = 0.0
-        self._halted = False
-        self._halt_reason = ""
+
+        # Shared halt authority (optional, eliminates dual-halt)
+        self._safety = safety
+
+        # Local halt state (only used when _safety is None)
+        self._own_halted = False
+        self._own_halt_reason = ""
+
         self._sport_exposure: Dict[str, float] = {}
         self._bankroll_history: List[float] = []
+        self._bankroll_history.append(self._betting.bankroll)
+
+    # ------------------------------------------------------------------
+    # Halt delegation (ADR 0003 — unified halt authority)
+    # ------------------------------------------------------------------
+
+    @property
+    def _halted(self) -> bool:
+        """Halt flag — delegates to SafetyGuard when wired."""
+        if self._safety is not None:
+            return self._safety.is_halted
+        return self._own_halted
+
+    @_halted.setter
+    def _halted(self, value: bool) -> None:
+        if self._safety is not None:
+            return  # halt goes through SafetyGuard.halt()
+        self._own_halted = value
+
+    @property
+    def _halt_reason(self) -> str:
+        """Halt reason — delegates to SafetyGuard when wired."""
+        if self._safety is not None:
+            return self._safety.halt_reason
+        return self._own_halt_reason
+
+    @_halt_reason.setter
+    def _halt_reason(self, value: str) -> None:
+        if self._safety is not None:
+            return  # halt reason set through SafetyGuard.halt()
+        self._own_halt_reason = value
 
     # ------------------------------------------------------------------
     # Kelly stake computation
@@ -211,20 +250,27 @@ class BettingRiskManager:
         self._daily_stakes_count = 0
         self._daily_stake_total = 0.0
         self._consecutive_losses = 0
-        self._halted = False
-        self._halt_reason = ""
+        if self._safety is not None:
+            self._safety.reset_daily()
+        else:
+            self._own_halted = False
+            self._own_halt_reason = ""
         self._bankroll_history.append(bankroll)
         logger.info("Betting risk counters reset — bankroll: $%.2f", bankroll)
 
     def _halt(self, reason: str, bankroll: float) -> None:
-        self._halted = True
-        self._halt_reason = reason
+        # Always set local state first (also covers the no-safety path)
+        self._own_halted = True
+        self._own_halt_reason = reason
+        # Propagate to shared halt authority when wired
+        if self._safety is not None:
+            self._safety.halt(reason, bankroll)
         logger.critical("BETTING HALT: %s (bankroll: $%.2f)", reason, bankroll)
 
     def get_status(self) -> Dict[str, Any]:
         return {
-            "halted": self._halted,
-            "halt_reason": self._halt_reason,
+            "halted": self._halted,  # delegates to SafetyGuard when wired
+            "halt_reason": self._halt_reason,  # delegates to SafetyGuard when wired
             "consecutive_losses": self._consecutive_losses,
             "daily_stakes": self._daily_stakes_count,
             "daily_stake_total": round(self._daily_stake_total, 2),
@@ -235,5 +281,8 @@ class BettingRiskManager:
 
     @property
     def is_halted(self) -> bool:
-        return self._halted
+        """Delegates to SafetyGuard when wired."""
+        if self._safety is not None:
+            return self._safety.is_halted
+        return self._own_halted
 

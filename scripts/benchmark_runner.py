@@ -21,6 +21,7 @@ import argparse
 import csv
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -424,6 +425,13 @@ def git_run(*args: str) -> str:
     return result.stdout.strip()
 
 
+def _sanitize_stderr(text: str) -> str:
+    """Strip credential patterns from git stderr before logging."""
+    sanitized = re.sub(r'https?://[^@\s]+@', 'https://<redacted>@', text)
+    sanitized = re.sub(r'(token|password|secret|key)=[^&\s]+', r'\1=<redacted>', sanitized, flags=re.IGNORECASE)
+    return sanitized
+
+
 def commit_and_push(message: str) -> bool:
     """Stage trade logs and results, commit, and push."""
     try:
@@ -448,7 +456,7 @@ def commit_and_push(message: str) -> bool:
                 return True
             wait = 2 ** (attempt + 1)
             logger.warning("Push attempt %d failed, retrying in %ds: %s",
-                           attempt + 1, wait, push.stderr.strip())
+                           attempt + 1, wait, _sanitize_stderr(push.stderr.strip()))
             time.sleep(wait)
 
         logger.error("Push failed after 4 attempts")

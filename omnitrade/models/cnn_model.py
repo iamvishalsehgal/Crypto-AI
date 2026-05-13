@@ -687,7 +687,10 @@ class CNNTrainer:
         if not path.exists():
             raise FileNotFoundError(f"Model checkpoint not found: {path}")
 
-        checkpoint = torch.load(str(path), map_location=self._device, weights_only=False)
+        # SECURITY: weights_only=True prevents arbitrary code execution via
+        # malicious pickle data. The CNN checkpoint only contains state dicts
+        # and scalar params, so weights_only=True is safe here.
+        checkpoint = torch.load(str(path), map_location=self._device, weights_only=True)
 
         num_classes = checkpoint.get("num_classes", self._num_classes)
         in_channels = checkpoint.get("in_channels", self._in_channels)

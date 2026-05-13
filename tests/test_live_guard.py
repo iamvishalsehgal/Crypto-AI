@@ -77,7 +77,7 @@ def test_live_mode_without_confirmation_raises():
 def test_live_mode_with_confirmation_passes():
     s = Settings(trading_mode="live", live_trading_confirmed="true")
     executor = TradeExecutor(risk_manager=_make_risk_manager(s), settings=s)
-    assert executor.paper_mode == s.exchange.sandbox_mode
+    assert executor.paper_mode is False
 
 
 def test_paper_mode_overrides_sandbox():
@@ -107,7 +107,7 @@ def test_stock_live_without_confirmation_raises():
 def test_stock_live_with_confirmation_passes():
     s = Settings(trading_mode="live", live_trading_confirmed="true")
     executor = StockExecutor(risk_manager=_make_risk_manager(s), settings=s)
-    assert executor.paper_mode == s.stock.alpaca_paper
+    assert executor.paper_mode is False
 
 
 # -- AutoTrader CLI tests ---------------------------------------------------

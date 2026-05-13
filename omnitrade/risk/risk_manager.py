@@ -109,7 +109,7 @@ class RiskManager:
     def _halt_reason(self) -> str:
         """Halt reason — delegates to SafetyGuard when wired."""
         if self._safety is not None:
-            return getattr(self._safety, "_halt_reason", "")
+            return self._safety.halt_reason
         return self._own_halt_reason
 
     @_halt_reason.setter
@@ -333,7 +333,7 @@ class RiskManager:
                 f"{self.max_daily_drawdown:.0%}"
             )
             if self._safety is not None:
-                self._safety._halt("Daily drawdown", drawdown)
+                self._safety.halt("Daily drawdown", drawdown)
             else:
                 self._trading_halted = True
                 self._halt_reason = reason

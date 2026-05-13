@@ -466,7 +466,12 @@ class DDQNAgent:
         if not path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {path}")
 
-        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+        # SECURITY: weights_only=True prevents arbitrary code execution via
+        # malicious pickle data. If loading legacy models saved with full pickle
+        # objects (e.g., whole optimizer states with custom classes), this may
+        # fail and you may need to re-save them with torch.save(..., pickle_module=...)
+        # or migrate checkpoint format.
+        checkpoint = torch.load(path, map_location=self.device, weights_only=True)
 
         self.state_size = checkpoint["state_size"]
         self.action_size = checkpoint["action_size"]

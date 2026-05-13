@@ -25,6 +25,7 @@ import csv
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -38,7 +39,9 @@ from typing import Any, Dict, List, Optional
 # ── Project path ─────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
-os.chdir(PROJECT_ROOT)
+os.chdir(PROJECT_ROOT)  # FRAGILE: global chdir affects all threads and imported
+                         # modules that rely on relative paths. Prefer passing
+                         # PROJECT_ROOT explicitly to functions that need it.
 
 from omnitrade.config.settings import settings
 from omnitrade.config.asset_types import AssetType, UnifiedSignal
@@ -150,6 +153,15 @@ def git_run(*args: str) -> str:
     return result.stdout.strip()
 
 
+def _sanitize_stderr(text: str) -> str:
+    """Strip credential patterns (e.g., https://token@host) from git stderr
+    before logging, to prevent accidental secret exposure in log files."""
+    sanitized = re.sub(r'https?://[^@\s]+@', 'https://<redacted>@', text)
+    # Also scrub bearer tokens and password fields in error messages
+    sanitized = re.sub(r'(token|password|secret|key)=[^&\s]+', r'\1=<redacted>', sanitized, flags=re.IGNORECASE)
+    return sanitized
+
+
 def auto_commit_and_push() -> bool:
     try:
         git_run("add", "reports/")
@@ -169,7 +181,7 @@ def auto_commit_and_push() -> bool:
             logger.info("Pushed report update to GitHub")
             return True
         else:
-            logger.warning("Push failed: %s", push.stderr.strip())
+            logger.warning("Push failed: %s", _sanitize_stderr(push.stderr.strip()))
             return False
     except Exception as exc:
         logger.error("Git commit/push error: %s", exc)
@@ -559,7 +571,7 @@ class AutoTrader:
         self.risk = RiskManager(settings, safety=self.safety)
 
         # AssetRouter as central dispatcher
-        self.router = AssetRouter(settings=settings, risk_manager=self.risk, mode=self._mode)
+        self.router = AssetRouter(settings=settings, risk_manager=self.risk, safety=self.safety, mode=self._mode)
         self.executor = self.router.crypto_executor
 
         # Stock components
@@ -786,7 +798,7 @@ class AutoTrader:
 
         # ── 0b. Safety halt check ──
         if self.safety.is_halted:
-            return {"symbol": symbol, "signal": "HALTED", "reason": self.safety._halt_reason}
+            return {"symbol": symbol, "signal": "HALTED", "reason": self.safety.halt_reason}
 
         now_ts = time.time()
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -930,7 +942,7 @@ class AutoTrader:
             return {"symbol": ticker, "signal": "PAUSED", "reason": "circuit breaker open"}
 
         if self.safety.is_halted:
-            return {"symbol": ticker, "signal": "HALTED", "reason": self.safety._halt_reason}
+            return {"symbol": ticker, "signal": "HALTED", "reason": self.safety.halt_reason}
 
         now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -1039,7 +1051,7 @@ class AutoTrader:
             return [{"sport": "all", "signal": "PAUSED", "reason": "circuit breaker open"}]
 
         if self.safety.is_halted:
-            return [{"sport": "all", "signal": "HALTED", "reason": self.safety._halt_reason}]
+            return [{"sport": "all", "signal": "HALTED", "reason": self.safety.halt_reason}]
 
         results = []
         bet_executor = self.router.bet_executor

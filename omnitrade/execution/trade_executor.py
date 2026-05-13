@@ -16,6 +16,7 @@ import ccxt
 import pandas as pd
 
 from omnitrade.config.settings import Settings, settings as _default_settings
+from omnitrade.execution.mode_guard import validate_trading_mode
 from omnitrade.execution.paper_wallet import PaperWallet
 from omnitrade.risk.risk_manager import PortfolioState, RiskManager
 from omnitrade.utils.logger import get_logger
@@ -41,25 +42,8 @@ class TradeExecutor:
     ) -> None:
         self._settings = settings or _default_settings
         self.risk_manager = risk_manager
-        self.paper_mode: bool = self._settings.exchange.sandbox_mode
-
         # ── Safety lock: enforce trading_mode guard ──────────────────────
-        mode = self._settings.trading_mode
-        if mode == "paper":
-            self.paper_mode = True
-        elif mode == "live":
-            if self._settings.live_trading_confirmed != "true":
-                raise RuntimeError(
-                    "LIVE TRADING MODE requires LIVE_TRADING_CONFIRMED=true. "
-                    "Set this environment variable to acknowledge that you want "
-                    "real orders placed on the exchange."
-                )
-            logger.critical(
-                "!!!!!!!!!! TRADE EXECUTOR INITIALISED IN LIVE MODE — "
-                "REAL ORDERS WILL BE PLACED !!!!!!!!!!"
-            )
-        else:
-            raise RuntimeError(f"Invalid trading_mode: {mode!r}")
+        self.paper_mode: bool = validate_trading_mode(self._settings)
 
         # Exchange connection (real or sandbox)
         exchange_class = getattr(ccxt, self._settings.exchange.name, None)

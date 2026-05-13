@@ -383,13 +383,33 @@ class SafetyGuard:
         return SafetyVerdict(True, "ok")
 
     # ==================================================================
-    # Internal
+    # Public halt API  (ADR 0003 — unified halt authority)
     # ==================================================================
 
-    def _halt(self, reason: str, value: Any) -> None:
+    def halt(self, reason: str, value: Any) -> None:
+        """Public halt method — the single entry point to stop ALL trading.
+
+        Args:
+            reason: Short label for the halt trigger (e.g. "Equity drawdown").
+            value: Additional context (e.g. drawdown fraction, loss count).
+        """
         self._halted = True
         self._halt_reason = f"{reason}: {value}"
         logger.critical("SAFETY HALT: %s = %s", reason, value)
+
+    @property
+    def halt_reason(self) -> str:
+        """Public read-only halt reason for external callers."""
+        return self._halt_reason
+
+    # ------------------------------------------------------------------
+    # Deprecated private aliases (backward compat, removed in next major)
+    # ------------------------------------------------------------------
+    # _halt() and _halt_reason are kept so internal SafetyGuard methods
+    # and pre-ADR-0003 callers continue to work.  Do NOT use in new code.
+
+    def _halt(self, reason: str, value: Any) -> None:  # deprecated
+        self.halt(reason, value)
 
     @property
     def is_halted(self) -> bool:

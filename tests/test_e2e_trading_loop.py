@@ -233,7 +233,7 @@ def test_cycle_respects_safety_halt():
 
         trader = AutoTrader(asset_types=["crypto"])
         trader.market = mock_collector
-        trader.safety._halt("test halt", "e2e")
+        trader.safety.halt("test halt", "e2e")
 
         result = trader.run_cycle("BTC/USDT")
 
@@ -321,7 +321,7 @@ def test_risk_manager_wired_to_safety():
     assert not trader.safety.is_halted
     assert not trader.risk._trading_halted
 
-    trader.safety._halt("test", "e2e")
+    trader.safety.halt("test", "e2e")
     assert trader.risk._trading_halted  # delegates to safety
     assert "test" in trader.risk._halt_reason
 

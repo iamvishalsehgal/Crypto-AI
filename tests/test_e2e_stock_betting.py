@@ -218,7 +218,7 @@ def test_stock_cycle_with_safety_halt():
         mock_smf.return_value = models
 
         trader = AutoTrader(asset_types=["stock"])
-        trader.safety._halt("test halt", "e2e")
+        trader.safety.halt("test halt", "e2e")
         result = trader.run_stock_cycle("AAPL")
 
     assert result["signal"] == "HALTED"
@@ -505,7 +505,7 @@ def test_betting_cycle_with_safety_halt():
 
         trader = AutoTrader(asset_types=["bet"])
         trader.betting_collector = collector
-        trader.safety._halt("test halt", "e2e")
+        trader.safety.halt("test halt", "e2e")
 
         results = trader.run_betting_cycle()
 
