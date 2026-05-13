@@ -1,6 +1,6 @@
 {
-  "last_updated": "2026-05-13T21:21:09.034348+00:00",
-  "cycle": 3,
+  "last_updated": "2026-05-13T22:30:14.246109+00:00",
+  "cycle": 5,
   "mode": "paper",
   "portfolio": {
     "balance_usd": 21000.0,
@@ -58,96 +58,14 @@
   },
   "last_signals": {
     "BTC/USDT": {
-      "signal": "HOLD",
-      "confidence": 0.1,
-      "buy_score": 0.0,
-      "sell_score": 0.1,
-      "reasons": [
-        "No strong confluence"
-      ],
-      "indicators": {
-        "rsi": 49.23,
-        "macd_hist": -11.2523,
-        "bb_pct": 0.5008,
-        "stoch_k": 81.2,
-        "adx": 77.0
-      },
       "symbol": "BTC/USDT",
-      "price": 79409.47,
-      "timestamp": "2026-05-13T21:21:06.489497+00:00"
+      "signal": "PAUSED",
+      "reason": "circuit breaker open"
     },
     "ETH/USDT": {
-      "signal": "HOLD",
-      "confidence": 0.2,
-      "buy_score": 0.2,
-      "sell_score": 0.15,
-      "reasons": [
-        "No strong confluence"
-      ],
-      "indicators": {
-        "rsi": 42.14,
-        "macd_hist": 0.1516,
-        "bb_pct": 0.406,
-        "stoch_k": 93.4,
-        "adx": 55.5
-      },
       "symbol": "ETH/USDT",
-      "price": 2257.35,
-      "timestamp": "2026-05-13T21:21:06.845208+00:00"
-    },
-    "stock:AAPL": {
-      "symbol": "AAPL",
-      "signal": "HOLD",
-      "confidence": 0.33,
-      "price": 298.88,
-      "timestamp": "2026-05-13T21:21:07.256760+00:00",
-      "asset_type": "stock"
-    },
-    "stock:TSLA": {
-      "symbol": "TSLA",
-      "signal": "HOLD",
-      "confidence": 0.3,
-      "price": 445.18,
-      "timestamp": "2026-05-13T21:21:07.862670+00:00",
-      "asset_type": "stock"
-    },
-    "stock:SPY": {
-      "symbol": "SPY",
-      "signal": "HOLD",
-      "confidence": 0.33,
-      "price": 742.3,
-      "timestamp": "2026-05-13T21:21:08.437476+00:00",
-      "asset_type": "stock"
-    },
-    "bet:soccer_epl": {
-      "sport": "soccer_epl",
-      "symbol": "unknown",
-      "side": "PASS",
-      "confidence": 0.0,
-      "asset_type": "bet",
-      "timestamp": "2026-05-13T21:21:08.792309+00:00",
-      "edge": 0,
-      "signal": "PASS"
-    },
-    "bet:basketball_nba": {
-      "sport": "basketball_nba",
-      "symbol": "unknown",
-      "side": "PASS",
-      "confidence": 0.0,
-      "asset_type": "bet",
-      "timestamp": "2026-05-13T21:21:08.884772+00:00",
-      "edge": 0,
-      "signal": "PASS"
-    },
-    "bet:americanfootball_nfl": {
-      "sport": "americanfootball_nfl",
-      "symbol": "unknown",
-      "side": "PASS",
-      "confidence": 0.0,
-      "asset_type": "bet",
-      "timestamp": "2026-05-13T21:21:08.959024+00:00",
-      "edge": 0,
-      "signal": "PASS"
+      "signal": "PAUSED",
+      "reason": "circuit breaker open"
     }
   }
 }
