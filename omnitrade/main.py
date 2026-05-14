@@ -22,8 +22,14 @@ Usage::
 
 from __future__ import annotations
 
+import os
+
+# Prevent XGBoost OpenMP → PyTorch threading conflict on Apple Silicon
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import argparse
 import asyncio
+import json
 import signal
 import sys
 import time
@@ -46,6 +52,16 @@ from omnitrade.monitoring.health_check import HealthChecker
 from omnitrade.risk.risk_manager import RiskManager
 from omnitrade.utils.logger import get_logger
 from omnitrade.learning import AutoRetrainer
+from omnitrade.risk.safety import SafetyGuard
+
+# Multi-agent pipeline
+from omnitrade.agents.bus import EventBus, PortfolioEvent
+from omnitrade.agents.data_collector import DataCollectorAgent
+from omnitrade.agents.feature_builder import FeatureBuilderAgent
+from omnitrade.agents.signal_generator import SignalGeneratorAgent
+from omnitrade.agents.risk_manager import RiskManagerAgent
+from omnitrade.agents.execution import ExecutionAgent
+from omnitrade.agents.monitor import MonitorAgent
 
 # Late imports for backtesting (only used in run_backtest, loaded here for locality)
 from omnitrade.backtesting.engine import BacktestEngine
@@ -117,12 +133,14 @@ class TradingBot:
 
         # ---- Risk & Execution ----
         self.risk_manager = RiskManager(self._settings)
+        self.safety = SafetyGuard(self._settings)
 
         # AssetRouter (central dispatcher for all lanes)
         self.router = AssetRouter(
             settings=self._settings,
             risk_manager=self.risk_manager,
             mode=mode,
+            safety=self.safety,
         )
 
         # ---- Stock models ----
@@ -198,13 +216,12 @@ class TradingBot:
                     logger.warning("Failed to load ensemble weights: %s", exc)
 
         # ── Stock models ──────────────────────────────────────────
+        # Create & load LSTM BEFORE XGBoost — XGBoost OpenMP conflicts
+        # with PyTorch on Apple Silicon if XGBoost is imported first
         if self.stock_models is not None:
             try:
-                self.stock_models.create_all()  # LSTM first, then XGBoost
-                stock_xgb_path = models_dir / "stock_xgboost_model"
-                if stock_xgb_path.exists():
-                    self.stock_models._models["xgboost"].load_model(str(stock_xgb_path))
-                    logger.info("Loaded stock XGBoost model")
+                # Phase 1: LSTM (PyTorch) — must be created & loaded first
+                self.stock_models.create_lstm()
                 stock_lstm_path = models_dir / "stock_lstm_model"
                 if stock_lstm_path.exists():
                     try:
@@ -212,6 +229,17 @@ class TradingBot:
                         logger.info("Loaded stock LSTM model")
                     except Exception as exc:
                         logger.warning("Failed to load stock LSTM model: %s", exc)
+
+                # Phase 2: XGBoost (OpenMP) — only after PyTorch is initialised
+                self.stock_models.create_xgboost()
+                stock_xgb_path = models_dir / "stock_xgboost_model"
+                if stock_xgb_path.exists():
+                    try:
+                        self.stock_models._models["xgboost"].load_model(str(stock_xgb_path))
+                        logger.info("Loaded stock XGBoost model")
+                    except Exception as exc:
+                        logger.warning("Failed to load stock XGBoost model: %s", exc)
+
                 self.stock_models._trained = True
                 logger.info("Stock models loaded from disk")
             except Exception as exc:
@@ -341,9 +369,14 @@ class TradingBot:
     # ------------------------------------------------------------------
 
     async def run(self) -> None:
-        """Main trading loop.  Runs until interrupted."""
+        """Launch multi-agent trading pipeline.
+
+        Spawns 6 concurrent agents that communicate via an event bus:
+        DataCollector → FeatureBuilder → SignalGenerator → RiskManager → Execution
+        Plus MonitorAgent for position watching.
+        """
         self._running = True
-        logger.info("Starting OmniTrade AI loop in %s mode", self._mode.upper())
+        logger.info("Starting OmniTrade AI multi-agent pipeline in %s mode", self._mode.upper())
 
         lane_info = self.router.get_status()
         await self.notifier.send_message(
@@ -358,73 +391,171 @@ class TradingBot:
         total_equity = unified_balance.get("total_usd_equivalent", 10_000)
         self.risk_manager.reset_daily(total_equity)
 
-        cycle = 0
-        while self._running:
-            cycle += 1
-            logger.info("=== Trading cycle %d ===", cycle)
+        # ── Event bus ────────────────────────────────────────────────
+        bus = EventBus()
 
-            # Process crypto symbols
-            if self.router.get_status()["has_crypto"]:
-                for symbol in self._settings.exchange.supported_symbols:
-                    try:
-                        await self._process_symbol(symbol)
-                    except Exception as exc:
-                        logger.error("Error processing crypto %s: %s", symbol, exc)
-                        await self.notifier.send_error_alert(
-                            f"Error processing crypto {symbol}: {exc}"
-                        )
+        # ── Agents ───────────────────────────────────────────────────
+        agents: list = []
 
-            # Process stock tickers
-            if self.router.get_status()["has_stock"] and self.stock_collector:
-                for ticker in self._settings.stock.supported_tickers:
-                    try:
-                        await self._process_stock(ticker)
-                    except Exception as exc:
-                        logger.error("Error processing stock %s: %s", ticker, exc)
-                        await self.notifier.send_error_alert(
-                            f"Error processing stock {ticker}: {exc}"
-                        )
+        # DataCollectorAgent (crypto + stock + betting)
+        data_agent = DataCollectorAgent(
+            bus=bus,
+            market_collector=self.market_collector,
+            stock_collector=self.stock_collector,
+            betting_collector=self.betting_collector,
+            settings=self._settings,
+        )
+        agents.append(data_agent)
 
-            # Process betting
-            if self.router.get_status()["has_bet"] and self.betting_collector:
+        # FeatureBuilderAgent
+        feature_agent = FeatureBuilderAgent(
+            bus=bus,
+            tech_features=self.tech_features,
+            stock_features=self.stock_feature_pipeline,
+        )
+        agents.append(feature_agent)
+
+        # SignalGeneratorAgent
+        signal_agent = SignalGeneratorAgent(
+            bus=bus,
+            ensemble=self.ensemble,
+            stock_models=self.stock_models,
+        )
+        agents.append(signal_agent)
+
+        # RiskManagerAgent
+        risk_agent = RiskManagerAgent(
+            bus=bus,
+            risk_manager=self.risk_manager,
+            safety=self.safety,
+            settings=self._settings,
+            ensemble=self.ensemble,
+        )
+        agents.append(risk_agent)
+
+        # ExecutionAgent
+        exec_agent = ExecutionAgent(
+            bus=bus,
+            router=self.router,
+            db=self.db,
+            notifier=self.notifier,
+            retrainer=self.retrainer,
+        )
+        agents.append(exec_agent)
+
+        # MonitorAgent (position stop-loss / take-profit watching)
+        monitor_agent = MonitorAgent(
+            bus=bus,
+            router=self.router,
+            risk_manager=self.risk_manager,
+            settings=self._settings,
+        )
+        agents.append(monitor_agent)
+
+        # ── Background tasks ─────────────────────────────────────────
+        background_tasks: list = []
+
+        # Auto-retrain loop
+        async def retrain_loop():
+            while self._running:
                 try:
-                    await self._process_betting()
-                except Exception as exc:
-                    logger.error("Error processing betting: %s", exc)
+                    if self.retrainer.should_retrain():
+                        logger.info("Retraining interval elapsed — starting auto-retrain")
+                        self.retrainer.retrain_all(
+                            market_collector=self.market_collector,
+                            stock_collector=self.stock_collector,
+                            betting_collector=self.betting_collector,
+                            stock_feature_pipeline=self.stock_feature_pipeline,
+                            betting_features=self.betting_features,
+                            ensemble=self.ensemble,
+                            stock_models=self.stock_models,
+                            betting_model=self.betting_model,
+                        )
+                except Exception:
+                    logger.exception("Auto-retrain failed")
+                await asyncio.sleep(60)
 
-            # Check existing positions for stop-loss / take-profit
-            await self._monitor_positions()
+        background_tasks.append(asyncio.create_task(retrain_loop()))
 
-            # Auto-retraining check (daily by default)
-            if self.retrainer.should_retrain():
-                logger.info("Retraining interval elapsed — starting auto-retrain")
-                self.retrainer.retrain_all(
-                    market_collector=self.market_collector,
-                    stock_collector=self.stock_collector,
-                    betting_collector=self.betting_collector,
-                    stock_feature_pipeline=self.stock_feature_pipeline,
-                    betting_features=self.betting_features,
-                    ensemble=self.ensemble,
-                    stock_models=self.stock_models,
-                    betting_model=self.betting_model,
-                )
+        # Health check loop
+        async def health_loop():
+            while self._running:
+                try:
+                    health = await self.health_checker.check_system_resources()
+                    if health.get("warnings"):
+                        logger.warning("System health: %s", health)
+                except Exception:
+                    logger.exception("Health check failed")
+                await asyncio.sleep(300)
 
-            # Health check every 10 cycles
-            if cycle % 10 == 0:
-                health = self.health_checker.check_system_resources()
-                logger.info("System health: %s", health)
+        background_tasks.append(asyncio.create_task(health_loop()))
 
-            # Unified balance report
-            unified = self.router.get_unified_balance()
-            logger.info(
-                "Portfolio: $%.2f across %d lanes",
-                unified["total_usd_equivalent"],
-                len(unified["by_lane"]),
+        # Bus inspector
+        async def bus_inspector():
+            while self._running:
+                sizes = bus.queue_sizes()
+                total = sum(sizes.values())
+                if total > 0:
+                    logger.debug("Bus queues: %s", sizes)
+                await asyncio.sleep(30)
+
+        background_tasks.append(asyncio.create_task(bus_inspector()))
+
+        # Portfolio reporter — writes status.json
+        async def portfolio_reporter():
+            status_path = Path("reports/status.json")
+            while self._running:
+                try:
+                    event: PortfolioEvent = await bus.consume_portfolio()
+                    snapshot = {
+                        "last_updated": datetime.now(timezone.utc).isoformat(),
+                        "mode": self._mode,
+                        "portfolio": {
+                            "balance_usd": event.balance_usd,
+                            "equity": event.equity,
+                            "return_pct": event.return_pct,
+                            "open_positions": event.open_positions,
+                            "lanes": event.lanes,
+                        },
+                        "safety_status": {
+                            "halted": self.safety.is_halted,
+                            "halt_reason": getattr(self.safety, "_halt_reason", ""),
+                        },
+                    }
+                    status_path.parent.mkdir(parents=True, exist_ok=True)
+                    status_path.write_text(json.dumps(snapshot, indent=2))
+                except Exception:
+                    logger.exception("Portfolio reporter failed")
+
+        background_tasks.append(asyncio.create_task(portfolio_reporter()))
+
+        # ── Launch all agents ────────────────────────────────────────
+        agent_tasks = [asyncio.create_task(a.run()) for a in agents]
+        all_tasks = agent_tasks + background_tasks
+
+        logger.info(
+            "Multi-agent pipeline running — %d agents, %d background tasks",
+            len(agent_tasks),
+            len(background_tasks),
+        )
+
+        try:
+            done, pending = await asyncio.wait(
+                all_tasks,
+                return_when=asyncio.FIRST_EXCEPTION,
             )
-
-            # Wait before next cycle
-            logger.info("Cycle %d complete. Sleeping 60s...", cycle)
-            await asyncio.sleep(60)
+            for task in done:
+                exc = task.exception()
+                if exc:
+                    logger.error("Agent task failed: %s", exc)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            logger.info("Shutting down agents...")
+            for t in all_tasks:
+                t.cancel()
+            await asyncio.gather(*all_tasks, return_exceptions=True)
+            logger.info("All agents stopped")
 
     async def _process_symbol(self, symbol: str) -> None:
         """Run one full cycle for a single symbol."""

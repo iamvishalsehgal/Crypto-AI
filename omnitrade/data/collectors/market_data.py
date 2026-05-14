@@ -247,6 +247,31 @@ class MarketDataCollector:
         finally:
             await exchange.close()
 
+    async def watch_ohlcv(
+        self,
+        symbol: str,
+        timeframe: str = "1m",
+        limit: int = 500,
+    ) -> pd.DataFrame:
+        """Stream OHLCV candles in real-time via WebSocket.
+
+        Returns a DataFrame of the most recent *limit* candles whenever
+        a new candle closes or an existing candle updates.
+
+        Caller must handle exchange lifecycle — this method does NOT close
+        the exchange so it can be called repeatedly in a streaming loop.
+        """
+        exchange = self._get_ws_exchange()
+        candles: list = await exchange.watch_ohlcv(symbol, timeframe)
+        if not candles:
+            return pd.DataFrame(columns=_OHLCV_COLUMNS)
+
+        df = pd.DataFrame(candles, columns=_OHLCV_COLUMNS)
+        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+        if len(df) > limit:
+            df = df.tail(limit)
+        return df
+
     def fetch_all_symbols_ohlcv(
         self,
         timeframe: str = "1h",
