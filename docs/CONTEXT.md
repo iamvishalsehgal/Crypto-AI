@@ -86,3 +86,9 @@ The result object from `SafetyGuard.pre_trade_check()`. Three fields: `safe` (bo
 
 ## PnLTracker
 Tracks every Trade from open to close. Stores two lists: open Trades and closed Trades. On entry, creates an open Trade from an Order. On exit, matches the open Trade by symbol, computes P&L, moves to closed. Provides aggregate stats: win rate, profit factor, best/worst trade, total P&L.
+
+## AutoRetrainer
+Periodic self-learning pipeline. Retrains all lane models on fresh data every 24h (configurable). Records every completed trade's outcome and model attribution. Adapts ensemble weights via softmax over cumulative per-model PnL — profitable models get higher weight. Persists state (`retrain_state.json`) so learning survives restarts. Each retrain cycle produces per-lane training metrics. See `omnitrade/learning/auto_retrainer.py`.
+
+## RetrainCycle
+One complete pass of `AutoRetrainer.retrain_all()`: collect fresh data for all enabled lanes → retrain each lane's models → compute new labels from forward returns → persist models to disk → adapt ensemble weights → save state. Cycles trigger automatically when the retrain interval elapses and are checked on every trading loop iteration.

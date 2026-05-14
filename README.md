@@ -20,6 +20,7 @@ omnitrade/
 │   ├── stock_models   # Stock-specific model factory
 │   ├── betting_models # Value betting, Poisson, Kelly staking
 │   └── training/      # RL environment & training orchestrator
+├── learning/          # Auto-retraining pipeline, ensemble weight adaptation
 ├── ensemble/          # Weighted voting system
 ├── backtesting/       # Engine, walk-forward, stock & betting backtesters
 ├── risk/              # Risk management (crypto, betting-specific)
@@ -29,7 +30,7 @@ omnitrade/
 
 ## Features
 
-- **3-lane architecture** — Crypto (ccxt), Stocks (yfinance + Alpaca), Sports Betting (The Odds API)
+- **3-lane architecture** — Crypto (ccxt), Stocks (yfinance + Alpaca), Sports Betting (ESPN API + The Odds API)
 - **Multi-source data pipeline** — OHLCV prices, on-chain whale tracking, Reddit/Twitter/News sentiment, macroeconomic indicators (VIX, DXY, Fed rate), stock fundamentals, sports odds
 - **30+ technical indicators** — RSI, MACD, Bollinger Bands, Ichimoku, ADX, Stochastic, and more
 - **XGBoost feature selection** — automatically ranks and selects the most predictive features
@@ -38,7 +39,8 @@ omnitrade/
 - **Backtesting engine** — walk-forward validation, overfitting detection, stock & betting backtesters
 - **Risk management** — position sizing, stop-loss/take-profit, trailing stops, daily drawdown limits, Kelly criterion, adaptive Sharpe-based sizing
 - **Paper trading mode** — test strategies with simulated orders across all asset classes
-- **Autonomous operation** — Auto-retraining, circuit breakers, disk monitoring, log rotation, health checks
+- **Self-learning pipeline** — Automatic periodic retraining (24h cycle), PnL-based ensemble weight adaptation, model persistence with state recovery across restarts
+- **Autonomous operation** — Circuit breakers, disk monitoring, log rotation, health checks
 - **Real-time monitoring** — Telegram alerts, Prometheus metrics, Grafana dashboards
 - **Docker deployment** — containerized with MongoDB, Grafana, and Prometheus
 

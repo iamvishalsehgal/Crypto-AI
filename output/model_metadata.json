@@ -1,0 +1,43 @@
+{
+  "xgboost": {
+    "last_trained": "2026-05-14T12:21:26.956001+00:00",
+    "asset_type": "crypto",
+    "metrics": {
+      "accuracy": 0.6297,
+      "f1_macro": 0.6292,
+      "val_accuracy": 0.4066,
+      "val_f1_macro": 0.4067,
+      "best_iteration": 18,
+      "classification_report": "              precision    recall  f1-score   support\n\n        SELL       0.33      0.50      0.40       141\n        HOLD       0.50      0.34      0.41       227\n         BUY       0.42      0.41      0.42       178\n\n    accuracy                           0.41       546\n   macro avg       0.42      0.42      0.41       546\nweighted avg       0.43      0.41      0.41       546\n"
+    },
+    "data_start": null,
+    "data_end": null,
+    "feature_count": null
+  },
+  "lightgbm": {
+    "last_trained": "2026-05-14T12:21:26.956308+00:00",
+    "asset_type": "crypto",
+    "metrics": {
+      "accuracy": 0.6089,
+      "f1_macro": 0.6079,
+      "val_accuracy": 0.37,
+      "val_f1_macro": 0.3636,
+      "best_iteration": 3,
+      "classification_report": "              precision    recall  f1-score   support\n\n        SELL       0.31      0.53      0.39       141\n        HOLD       0.46      0.37      0.41       227\n         BUY       0.35      0.25      0.29       178\n\n    accuracy                           0.37       546\n   macro avg       0.38      0.38      0.36       546\nweighted avg       0.39      0.37      0.37       546\n"
+    },
+    "data_start": null,
+    "data_end": null,
+    "feature_count": null
+  },
+  "stock_ensemble": {
+    "last_trained": "2026-05-12T19:24:58.210027+00:00",
+    "asset_type": "stock",
+    "metrics": {
+      "xgboost": "{'accuracy': 0.9749114239203294}",
+      "lstm": "{'error': \"ReduceLROnPlateau.__init__() got an unexpected keyword argument 'verbose'\"}"
+    },
+    "data_start": null,
+    "data_end": null,
+    "feature_count": null
+  }
+}

@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-05-14T08:04:25.631341+00:00",
+  "last_updated": "2026-05-14T09:45:11.574345+00:00",
   "cycle": 3,
   "mode": "paper",
   "portfolio": {
@@ -59,48 +59,48 @@
   "last_signals": {
     "BTC/USDT": {
       "signal": "HOLD",
-      "confidence": 0.15,
+      "confidence": 0.23,
       "buy_score": 0.1,
-      "sell_score": 0.15,
+      "sell_score": 0.23,
       "reasons": [
         "No strong confluence"
       ],
       "indicators": {
-        "rsi": 51.84,
-        "macd_hist": 72.4098,
-        "bb_pct": 0.698,
-        "stoch_k": 92.6,
-        "adx": 74.1
+        "rsi": 52.93,
+        "macd_hist": 63.2486,
+        "bb_pct": 0.7213,
+        "stoch_k": 93.2,
+        "adx": 74.5
       },
       "symbol": "BTC/USDT",
-      "price": 79676.56,
-      "timestamp": "2026-05-14T08:04:23.891649+00:00"
+      "price": 79664.06,
+      "timestamp": "2026-05-14T09:45:09.737387+00:00"
     },
     "ETH/USDT": {
       "signal": "HOLD",
-      "confidence": 0.35,
+      "confidence": 0.23,
       "buy_score": 0.2,
-      "sell_score": 0.35,
+      "sell_score": 0.23,
       "reasons": [
         "No strong confluence"
       ],
       "indicators": {
-        "rsi": 54.67,
-        "macd_hist": 4.4001,
-        "bb_pct": 0.8532,
-        "stoch_k": 97.4,
-        "adx": 68.8
+        "rsi": 54.49,
+        "macd_hist": 4.1402,
+        "bb_pct": 0.8187,
+        "stoch_k": 97.1,
+        "adx": 69.7
       },
       "symbol": "ETH/USDT",
-      "price": 2262.93,
-      "timestamp": "2026-05-14T08:04:24.146789+00:00"
+      "price": 2256.49,
+      "timestamp": "2026-05-14T09:45:10.051224+00:00"
     },
     "stock:AAPL": {
       "symbol": "AAPL",
       "signal": "HOLD",
       "confidence": 0.33,
       "price": 298.88,
-      "timestamp": "2026-05-14T08:04:24.646404+00:00",
+      "timestamp": "2026-05-14T09:45:10.542782+00:00",
       "asset_type": "stock"
     },
     "stock:TSLA": {
@@ -108,7 +108,7 @@
       "signal": "HOLD",
       "confidence": 0.3,
       "price": 445.18,
-      "timestamp": "2026-05-14T08:04:24.932584+00:00",
+      "timestamp": "2026-05-14T09:45:10.770900+00:00",
       "asset_type": "stock"
     },
     "stock:SPY": {
@@ -116,7 +116,7 @@
       "signal": "HOLD",
       "confidence": 0.33,
       "price": 742.3,
-      "timestamp": "2026-05-14T08:04:25.156184+00:00",
+      "timestamp": "2026-05-14T09:45:11.057571+00:00",
       "asset_type": "stock"
     },
     "bet:soccer_epl": {
@@ -125,7 +125,7 @@
       "side": "PASS",
       "confidence": 0.0,
       "asset_type": "bet",
-      "timestamp": "2026-05-14T08:04:25.391266+00:00",
+      "timestamp": "2026-05-14T09:45:11.287851+00:00",
       "edge": 0,
       "signal": "PASS"
     },
@@ -135,7 +135,7 @@
       "side": "PASS",
       "confidence": 0.0,
       "asset_type": "bet",
-      "timestamp": "2026-05-14T08:04:25.481000+00:00",
+      "timestamp": "2026-05-14T09:45:11.419268+00:00",
       "edge": 0,
       "signal": "PASS"
     },
@@ -145,7 +145,7 @@
       "side": "PASS",
       "confidence": 0.0,
       "asset_type": "bet",
-      "timestamp": "2026-05-14T08:04:25.556171+00:00",
+      "timestamp": "2026-05-14T09:45:11.497134+00:00",
       "edge": 0,
       "signal": "PASS"
     }

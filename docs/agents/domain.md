@@ -4,7 +4,7 @@ How the engineering skills should consume this repo's domain documentation when 
 
 ## Before exploring, read these
 
-- **`docs/CONTEXT.md`** at the repo root — 18-term domain glossary for OmniTrade AI
+- **`docs/CONTEXT.md`** at the repo root — 20-term domain glossary for OmniTrade AI
 - **`docs/adr/`** — 3 ADRs covering architectural decisions (PaperWallet extraction, EnsembleVoter delegation, unified halt)
 - Use the glossary's vocabulary in all output — don't drift to synonyms
 
@@ -26,6 +26,7 @@ Single-context repo:
 │       ├── triage-labels.md
 │       └── domain.md
 └── omnitrade/
+    └── learning/   # AutoRetrainer + ensemble weight adaptation
 ```
 
 ## Use the glossary's vocabulary
