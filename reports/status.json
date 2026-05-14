@@ -1,6 +1,6 @@
 {
-  "last_updated": "2026-05-14T08:01:28.492319+00:00",
-  "cycle": 5,
+  "last_updated": "2026-05-14T09:17:57.499146+00:00",
+  "cycle": 3,
   "mode": "paper",
   "portfolio": {
     "balance_usd": 21000.0,
@@ -59,11 +59,31 @@
   "last_signals": {
     "BTC/USDT": {
       "symbol": "BTC/USDT",
-      "signal": "PAUSED",
-      "reason": "circuit breaker open"
+      "signal": "ERROR",
+      "reason": "data fetch: binance GET https://testnet.binance.vision/api/v3/exchangeInfo 451  {\n  \"code\": 0,\n  \"msg\": \"Service unavailable from a restricted location according to 'b. Eligibility' in https://www.binance.com/en/terms. Please contact customer service if you believe you received this message in error.\"\n}"
     },
     "ETH/USDT": {
       "symbol": "ETH/USDT",
+      "signal": "PAUSED",
+      "reason": "circuit breaker open"
+    },
+    "stock:AAPL": {
+      "symbol": "AAPL",
+      "signal": "PAUSED",
+      "reason": "circuit breaker open"
+    },
+    "stock:TSLA": {
+      "symbol": "TSLA",
+      "signal": "PAUSED",
+      "reason": "circuit breaker open"
+    },
+    "stock:SPY": {
+      "symbol": "SPY",
+      "signal": "PAUSED",
+      "reason": "circuit breaker open"
+    },
+    "bet:all": {
+      "sport": "all",
       "signal": "PAUSED",
       "reason": "circuit breaker open"
     }
