@@ -23,6 +23,7 @@ from typing import Any, Dict, Optional, Union
 
 import numpy as np
 import pandas as pd
+import lightgbm as lgb
 from lightgbm import LGBMClassifier
 from sklearn.metrics import accuracy_score, classification_report, f1_score
 
@@ -66,8 +67,12 @@ class LightGBMTrader:
             n_estimators=n_estimators,
             max_depth=max_depth,
             learning_rate=learning_rate,
-            subsample=0.8,
-            colsample_bytree=0.8,
+            subsample=0.7,
+            colsample_bytree=0.7,
+            reg_alpha=0.5,
+            reg_lambda=1.0,
+            min_child_samples=20,
+            min_child_weight=5.0,
             objective="multiclass",
             num_class=3,
             random_state=42,
@@ -126,7 +131,7 @@ class LightGBMTrader:
             sample_weight=sample_weight,
             eval_set=[(X_val, y_val_mapped)],
             eval_metric="multi_logloss",
-            callbacks=[],
+            callbacks=[lgb.early_stopping(25, verbose=False), lgb.log_evaluation(0)],
         )
         self._is_fitted = True
 

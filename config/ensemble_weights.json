@@ -1,9 +1,9 @@
 {
   "weights": {
-    "xgboost": 0.3941,
-    "lightgbm": 0.3996
+    "xgboost": 0.4067,
+    "lightgbm": 0.3668
   },
-  "last_updated": "2026-05-14T11:26:44.055702+00:00",
+  "last_updated": "2026-05-14T12:21:26.954835+00:00",
   "models": [
     "xgboost",
     "lightgbm"

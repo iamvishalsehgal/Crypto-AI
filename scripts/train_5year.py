@@ -99,20 +99,26 @@ def fetch_all_daily(symbol: str) -> pd.DataFrame:
     return df
 
 
-def engineer_features(ohlcv: pd.DataFrame) -> pd.DataFrame:
-    """Compute technical features and generate labels."""
+def engineer_features(ohlcv: pd.DataFrame, label_threshold: float = 0.02, forward_days: int = 3) -> pd.DataFrame:
+    """Compute technical features and generate labels.
+
+    Labels use *forward_days*-ahead return vs *label_threshold*.
+    Default: 3-day forward return, 2% threshold → filters daily noise.
+    """
     from omnitrade.features.technical import TechnicalFeatures
 
     tech = TechnicalFeatures(settings)
     features = tech.compute_all(ohlcv)
 
     if "close" in features.columns:
-        future_return = features["close"].pct_change(1).shift(-1)
+        # Multi-day forward return for smoother signal
+        future_return = features["close"].pct_change(forward_days).shift(-forward_days)
         labels = pd.Series(0, index=features.index, name="signal")
-        labels[future_return > 0.0015] = 1
-        labels[future_return < -0.0015] = -1
+        labels[future_return > label_threshold] = 1     # BUY
+        labels[future_return < -label_threshold] = -1   # SELL
         features["signal"] = labels
-        features = features.iloc[:-1]
+        # Drop last forward_days rows (NaN future return)
+        features = features.iloc[:-forward_days]
 
     features = features.ffill().bfill().fillna(0)
     return features

@@ -58,16 +58,21 @@ class XGBoostTrader:
 
         self._model = XGBClassifier(
             n_estimators=n_estimators,
-            max_depth=6,
-            learning_rate=0.1,
-            subsample=0.8,
-            colsample_bytree=0.8,
+            max_depth=5,
+            learning_rate=0.05,
+            subsample=0.7,
+            colsample_bytree=0.7,
+            reg_alpha=0.5,
+            reg_lambda=1.0,
+            min_child_weight=5,
+            gamma=0.1,
             eval_metric="mlogloss",
             objective="multi:softprob",
             num_class=3,
             use_label_encoder=False,
             random_state=42,
             n_jobs=-1,
+            early_stopping_rounds=25,
         )
 
         self._is_fitted: bool = False

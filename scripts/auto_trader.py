@@ -80,7 +80,7 @@ DISK_MIN_FREE_GB = 1.0
 
 # Backtest defaults
 BACKTEST_STARTING_BALANCE = 10_000.0
-BACKTEST_POSITION_SIZE_PCT = 0.10
+BACKTEST_POSITION_SIZE_PCT = 0.05
 BACKTEST_MIN_CONFIDENCE = 0.45
 
 
@@ -429,9 +429,10 @@ def make_strategy(tech: TechnicalFeatures, ensemble: EnsembleVoter):
         ``BacktestEngine.run()``.
     """
     _FEATURE_COLS_CACHE: list = []
+    _state: dict = {"in_position": False}  # mutable container so caller can reset
 
     def strategy(data: pd.DataFrame, idx: int):
-        nonlocal _FEATURE_COLS_CACHE
+        nonlocal _FEATURE_COLS_CACHE, _state
         if idx < 60:  # need enough warm-up candles for indicators
             return None
         window = data.iloc[max(0, idx - 499): idx + 1]
@@ -457,9 +458,11 @@ def make_strategy(tech: TechnicalFeatures, ensemble: EnsembleVoter):
             if ensemble.should_execute(vote, min_confidence=0.65):
                 price = float(data["close"].iloc[idx])
                 amount = BACKTEST_STARTING_BALANCE * BACKTEST_POSITION_SIZE_PCT / price
-                if vote["signal"] == "BUY":
+                if vote["signal"] == "BUY" and not _state["in_position"]:
+                    _state["in_position"] = True
                     return {"side": "buy", "amount": amount}
-                elif vote["signal"] == "SELL":
+                elif vote["signal"] == "SELL" and _state["in_position"]:
+                    _state["in_position"] = False
                     return {"side": "close"}
             return None
 
@@ -468,11 +471,13 @@ def make_strategy(tech: TechnicalFeatures, ensemble: EnsembleVoter):
         prev_dict = features.iloc[-2].to_dict()
         sig = SignalGenerator.generate(latest_dict, prev_dict)
 
-        if sig["signal"] == "BUY" and sig["confidence"] >= BACKTEST_MIN_CONFIDENCE:
+        if sig["signal"] == "BUY" and sig["confidence"] >= BACKTEST_MIN_CONFIDENCE and not _state["in_position"]:
             price = float(data["close"].iloc[idx])
             amount = BACKTEST_STARTING_BALANCE * BACKTEST_POSITION_SIZE_PCT / price
+            _state["in_position"] = True
             return {"side": "buy", "amount": amount}
-        elif sig["signal"] == "SELL" and sig["confidence"] >= BACKTEST_MIN_CONFIDENCE:
+        elif sig["signal"] == "SELL" and sig["confidence"] >= BACKTEST_MIN_CONFIDENCE and _state["in_position"]:
+            _state["in_position"] = False
             return {"side": "close"}
         return None
 
