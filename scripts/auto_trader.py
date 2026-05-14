@@ -913,6 +913,8 @@ class AutoTrader:
                     exit_price = close_result.get("price", price)
                     closed_trade = self.pnl.record_exit(action["symbol"], exit_price)
                     pnl_val = closed_trade.pnl if closed_trade else 0
+                    if closed_trade:
+                        self.risk.record_return(closed_trade.pnl_pct / 100.0)
                     is_loss = pnl_val < 0
                     fee = close_result.get("fee", 0)
                     self.safety.record_trade(action["symbol"], fee, is_loss=is_loss)

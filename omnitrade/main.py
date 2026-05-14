@@ -424,7 +424,7 @@ class TradingBot:
         )
 
         # 4. Execute if actionable
-        if signal_result["signal"] in ("BUY", "SELL") and signal_result.get("confidence", 0) > 0.5:
+        if self.ensemble.should_execute(signal_result, min_confidence=0.65):
             crypto_exec = self.router.crypto_executor
             balance = crypto_exec.get_balance()
             usdt_total = balance.get("USDT", {}).get("total", 0)
@@ -486,7 +486,7 @@ class TradingBot:
         )
 
         # 4. Execute if actionable
-        if signal_result["signal"] in ("BUY", "SELL") and signal_result.get("confidence", 0) > 0.5:
+        if self.ensemble.should_execute(signal_result, min_confidence=0.65):
             last_close = float(ohlcv["close"].iloc[-1])
             balance = self.router.stock_executor.get_balance() if self.router.stock_executor else {}
             usd_total = balance.get("USD", {}).get("total", 10_000)

@@ -1,5 +1,5 @@
 {
-  "last_updated": "2026-05-14T09:17:57.499146+00:00",
+  "last_updated": "2026-05-14T08:04:25.631341+00:00",
   "cycle": 3,
   "mode": "paper",
   "portfolio": {
@@ -58,34 +58,96 @@
   },
   "last_signals": {
     "BTC/USDT": {
+      "signal": "HOLD",
+      "confidence": 0.15,
+      "buy_score": 0.1,
+      "sell_score": 0.15,
+      "reasons": [
+        "No strong confluence"
+      ],
+      "indicators": {
+        "rsi": 51.84,
+        "macd_hist": 72.4098,
+        "bb_pct": 0.698,
+        "stoch_k": 92.6,
+        "adx": 74.1
+      },
       "symbol": "BTC/USDT",
-      "signal": "ERROR",
-      "reason": "data fetch: binance GET https://testnet.binance.vision/api/v3/exchangeInfo 451  {\n  \"code\": 0,\n  \"msg\": \"Service unavailable from a restricted location according to 'b. Eligibility' in https://www.binance.com/en/terms. Please contact customer service if you believe you received this message in error.\"\n}"
+      "price": 79676.56,
+      "timestamp": "2026-05-14T08:04:23.891649+00:00"
     },
     "ETH/USDT": {
+      "signal": "HOLD",
+      "confidence": 0.35,
+      "buy_score": 0.2,
+      "sell_score": 0.35,
+      "reasons": [
+        "No strong confluence"
+      ],
+      "indicators": {
+        "rsi": 54.67,
+        "macd_hist": 4.4001,
+        "bb_pct": 0.8532,
+        "stoch_k": 97.4,
+        "adx": 68.8
+      },
       "symbol": "ETH/USDT",
-      "signal": "PAUSED",
-      "reason": "circuit breaker open"
+      "price": 2262.93,
+      "timestamp": "2026-05-14T08:04:24.146789+00:00"
     },
     "stock:AAPL": {
       "symbol": "AAPL",
-      "signal": "PAUSED",
-      "reason": "circuit breaker open"
+      "signal": "HOLD",
+      "confidence": 0.33,
+      "price": 298.88,
+      "timestamp": "2026-05-14T08:04:24.646404+00:00",
+      "asset_type": "stock"
     },
     "stock:TSLA": {
       "symbol": "TSLA",
-      "signal": "PAUSED",
-      "reason": "circuit breaker open"
+      "signal": "HOLD",
+      "confidence": 0.3,
+      "price": 445.18,
+      "timestamp": "2026-05-14T08:04:24.932584+00:00",
+      "asset_type": "stock"
     },
     "stock:SPY": {
       "symbol": "SPY",
-      "signal": "PAUSED",
-      "reason": "circuit breaker open"
+      "signal": "HOLD",
+      "confidence": 0.33,
+      "price": 742.3,
+      "timestamp": "2026-05-14T08:04:25.156184+00:00",
+      "asset_type": "stock"
     },
-    "bet:all": {
-      "sport": "all",
-      "signal": "PAUSED",
-      "reason": "circuit breaker open"
+    "bet:soccer_epl": {
+      "sport": "soccer_epl",
+      "symbol": "unknown",
+      "side": "PASS",
+      "confidence": 0.0,
+      "asset_type": "bet",
+      "timestamp": "2026-05-14T08:04:25.391266+00:00",
+      "edge": 0,
+      "signal": "PASS"
+    },
+    "bet:basketball_nba": {
+      "sport": "basketball_nba",
+      "symbol": "unknown",
+      "side": "PASS",
+      "confidence": 0.0,
+      "asset_type": "bet",
+      "timestamp": "2026-05-14T08:04:25.481000+00:00",
+      "edge": 0,
+      "signal": "PASS"
+    },
+    "bet:americanfootball_nfl": {
+      "sport": "americanfootball_nfl",
+      "symbol": "unknown",
+      "side": "PASS",
+      "confidence": 0.0,
+      "asset_type": "bet",
+      "timestamp": "2026-05-14T08:04:25.556171+00:00",
+      "edge": 0,
+      "signal": "PASS"
     }
   }
 }
