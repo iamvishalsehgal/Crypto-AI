@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
+import numpy as np
 import pandas as pd
 
 from omnitrade.config.settings import Settings, settings
@@ -44,6 +45,7 @@ from omnitrade.monitoring.telegram_bot import TelegramNotifier
 from omnitrade.monitoring.health_check import HealthChecker
 from omnitrade.risk.risk_manager import RiskManager
 from omnitrade.utils.logger import get_logger
+from omnitrade.learning import AutoRetrainer
 
 # Late imports for backtesting (only used in run_backtest, loaded here for locality)
 from omnitrade.backtesting.engine import BacktestEngine
@@ -142,6 +144,10 @@ class TradingBot:
         self.db = MongoDBStorage(self._settings)
         self.db.connect()
 
+        # ---- Auto-learning ----
+        self.retrainer = AutoRetrainer(self._settings)
+        self.retrainer.load_retrain_state()
+
         logger.info("All components initialised — lanes: %s", self.router.get_status())
 
     # ------------------------------------------------------------------
@@ -194,7 +200,7 @@ class TradingBot:
         # ── Stock models ──────────────────────────────────────────
         if self.stock_models is not None:
             try:
-                self.stock_models.create_xgboost()
+                self.stock_models.create_all()  # LSTM first, then XGBoost
                 stock_xgb_path = models_dir / "stock_xgboost_model"
                 if stock_xgb_path.exists():
                     self.stock_models._models["xgboost"].load_model(str(stock_xgb_path))
@@ -388,6 +394,20 @@ class TradingBot:
 
             # Check existing positions for stop-loss / take-profit
             await self._monitor_positions()
+
+            # Auto-retraining check (daily by default)
+            if self.retrainer.should_retrain():
+                logger.info("Retraining interval elapsed — starting auto-retrain")
+                self.retrainer.retrain_all(
+                    market_collector=self.market_collector,
+                    stock_collector=self.stock_collector,
+                    betting_collector=self.betting_collector,
+                    stock_feature_pipeline=self.stock_feature_pipeline,
+                    betting_features=self.betting_features,
+                    ensemble=self.ensemble,
+                    stock_models=self.stock_models,
+                    betting_model=self.betting_model,
+                )
 
             # Health check every 10 cycles
             if cycle % 10 == 0:
@@ -610,6 +630,17 @@ class TradingBot:
                     **result,
                     "reason": action["action"],
                 })
+                # Record closed trade for auto-learning feedback
+                trade_record = {
+                    "model_name": result.get("model", "ensemble"),
+                    "pnl": result.get("pnl", result.get("realized_pnl", 0.0)),
+                    "side": result.get("side", action.get("action", "exit")),
+                    "confidence": result.get("confidence", 0),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "symbol": action["symbol"],
+                    "asset_type": asset_type_str,
+                }
+                self.retrainer.record_trade(trade_record)
 
     def stop(self) -> None:
         """Signal the bot to stop after the current cycle."""
@@ -625,6 +656,12 @@ class TradingBot:
     def run_backtest(self) -> None:
         """Run backtesting on historical data across all enabled asset lanes."""
         logger.info("Starting backtesting mode — lanes: %s", self._enabled_assets)
+
+        # Disable sandbox for backtesting — testnet limits historical data
+        if self._settings.exchange.sandbox_mode:
+            self._settings.exchange.sandbox_mode = False
+            self.market_collector._exchange.set_sandbox_mode(False)
+            logger.info("Sandbox mode disabled for backtesting (real data, no trades executed)")
         engine = BacktestEngine(self._settings)
         validator = WalkForwardValidator(self._settings)
         detector = OverfittingDetector(self._settings)
@@ -642,15 +679,41 @@ class TradingBot:
                     logger.warning("Insufficient data for %s, skipping", symbol)
                     continue
 
-                def rsi_strategy(row):
-                    rsi = row.get("rsi_14", 50)
-                    if rsi < 30:
-                        return 1
-                    elif rsi > 70:
-                        return -1
-                    return 0
+                # ML ensemble strategy — pre-compute signals for all rows
+                numeric_features = self._numeric_features(features)
+                n_expected = len(numeric_features.columns)
+                signals: Dict[int, Optional[Dict]] = {}
+                for i in range(len(features)):
+                    price = float(features.iloc[i].get("close", 0))
+                    if price <= 0:
+                        signals[i] = None
+                        continue
+                    try:
+                        row_df = numeric_features.iloc[[i]]
+                        row_df = row_df.replace([np.inf, -np.inf], np.nan)
+                        row_df = row_df.dropna(axis=1)
+                        if row_df.empty or len(row_df.columns) < n_expected:
+                            signals[i] = None
+                            continue
+                        pred = self.ensemble.vote({"features": row_df})
+                    except Exception:
+                        pred = {}
+                    side = pred.get("signal", "HOLD")
+                    conf = pred.get("confidence", 0)
+                    if side in ("BUY", "SELL") and conf >= 0.5:
+                        signals[i] = {"side": side.lower(), "amount": 500.0}
+                    else:
+                        signals[i] = None
 
-                result = engine.run(rsi_strategy, features)
+                # Log signal summary
+                buy_signals = sum(1 for s in signals.values() if s and s.get("side") == "buy")
+                sell_signals = sum(1 for s in signals.values() if s and s.get("side") == "sell")
+                logger.info("Crypto %s signals: BUY=%d, SELL=%d (out of %d rows)", symbol, buy_signals, sell_signals, len(features))
+
+                def ensemble_strategy(data, idx):
+                    return signals.get(idx)
+
+                result = engine.run(ensemble_strategy, features)
                 logger.info(
                     "%s backtest: return=%.2f%%, sharpe=%.2f, max_dd=%.2f%%, trades=%d",
                     symbol, result.total_return * 100, result.sharpe_ratio,

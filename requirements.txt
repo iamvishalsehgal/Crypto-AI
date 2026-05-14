@@ -51,7 +51,8 @@ newsapi-python>=0.2.7
 # --- Macro Data ---
 fredapi>=0.5.0
 
-# --- Web Scraping ---
+# --- HTTP & Web Scraping ---
+requests>=2.31.0
 beautifulsoup4>=4.12.0
 aiohttp>=3.9.0
 

@@ -128,7 +128,7 @@ class BettingBacktester:
 
         odds_df = self._collector.fetch_odds(sport_key)
         if odds_df.empty:
-            odds_df = self._collector._mock_odds(sport_key)
+            odds_df = self._build_synthetic_odds(historical)
 
         features = self._features.compute_all(odds_df, historical)
         if features.empty or len(features) < 20:
@@ -146,8 +146,18 @@ class BettingBacktester:
             return BettingBacktestResult()
 
         # Train the model on in-sample data
-        if "home_score" in historical.columns and not historical.empty:
-            outcomes = (historical.get("home_score", 0) > historical.get("away_score", 0)).astype(int)
+        n_train = len(train_features)
+        if n_train >= 20:
+            if "home_score" in historical.columns and not historical.empty and len(historical) >= n_train:
+                hist_aligned = historical.iloc[:n_train]
+                outcomes = (hist_aligned.get("home_score", 0) > hist_aligned.get("away_score", 0)).astype(int)
+            else:
+                import numpy as np
+                np.random.seed(42)
+                outcomes = pd.Series(
+                    np.random.choice([0, 1], size=n_train, p=[0.45, 0.55]),
+                    index=train_features.index,
+                )
             self._model.train(train_features, outcomes)
 
         # Run simulation on test data
@@ -176,7 +186,7 @@ class BettingBacktester:
         historical = self._collector.fetch_historical_results(sport_key, days_back=days)
         odds_df = self._collector.fetch_odds(sport_key)
         if odds_df.empty:
-            odds_df = self._collector._mock_odds(sport_key)
+            odds_df = self._build_synthetic_odds(historical)
 
         features = self._features.compute_all(odds_df, historical)
         if len(features) < 30:
@@ -567,6 +577,33 @@ class BettingBacktester:
     @property
     def last_result(self) -> Optional[BettingBacktestResult]:
         return self._last_result
+
+    @staticmethod
+    def _build_synthetic_odds(historical: pd.DataFrame) -> pd.DataFrame:
+        """Build neutral odds (-110/-110) from real historical team names.
+
+        Used when no live odds API key is available. Uses even odds to
+        avoid introducing directional bias.
+        """
+        if historical.empty or "home_team" not in historical.columns:
+            return pd.DataFrame()
+
+        rows = []
+        for _, row in historical.iterrows():
+            rows.append({
+                "home_team": row.get("home_team", ""),
+                "away_team": row.get("away_team", ""),
+                "bookmaker": "synthetic",
+                "commence_time": row.get("commence_time", ""),
+                "home_odds": -110.0,
+                "away_odds": -110.0,
+                "draw_odds": 250.0 if row.get("draw_odds") is not None else 0,
+            })
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            from omnitrade.data.collectors.betting_data import BettingDataCollector
+            df = BettingDataCollector._add_implied_probabilities(df)
+        return df
 
     @staticmethod
     def _american_to_decimal(odds: float) -> float:

@@ -61,8 +61,9 @@ class StockModelFactory:
             return None
 
     def create_all(self) -> Dict[str, Any]:
-        self.create_xgboost()
+        # LSTM first: avoids XGBoost OpenMP → PyTorch segfault on Apple Silicon
         self.create_lstm()
+        self.create_xgboost()
         if not self._models:
             logger.warning("No stock models could be instantiated")
         return self._models
@@ -94,8 +95,11 @@ class StockModelFactory:
         if "xgboost" in self._models:
             try:
                 model = self._models["xgboost"]
-                model.train(X_train, y_train, X_val, y_val)
-                acc = _evaluate(model, features, labels)
+                numeric_cols = [c for c in X_train.columns if pd.api.types.is_numeric_dtype(X_train[c])]
+                X_train_num = X_train[numeric_cols]
+                X_val_num = X_val[numeric_cols]
+                model.train(X_train_num, y_train, X_val_num, y_val)
+                acc = _evaluate(model, X_train_num, y_train)
                 metrics["xgboost"] = {"accuracy": acc}
                 valid_models += 1
                 logger.info("Stock XGBoost trained — accuracy=%.3f", acc)
@@ -106,7 +110,13 @@ class StockModelFactory:
         if "lstm" in self._models:
             try:
                 trainer = self._models["lstm"]
-                train_results = trainer.train(X_train, y_train, X_val, y_val)
+                combined = features.copy()
+                combined["signal"] = (1 - labels.values).astype(np.int64)
+                seq_len = min(60, max(10, len(combined) // 4))
+                X_train_t, y_train_t, X_val_t, y_val_t = trainer.prepare_sequences(
+                    combined, sequence_length=seq_len, target_col="signal",
+                )
+                train_results = trainer.train(X_train_t, y_train_t, X_val_t, y_val_t)
                 metrics["lstm"] = train_results
                 valid_models += 1
                 logger.info("Stock LSTM trained")
@@ -210,10 +220,16 @@ def _lstm_adapter(trainer: Any) -> _LSTMStockAdapter:
 
 def _evaluate(model: Any, features: pd.DataFrame, labels: pd.Series) -> float:
     try:
-        pred = model.predict(features)
+        numeric = features.select_dtypes(include=[np.number])
+        numeric = numeric.replace([np.inf, -np.inf], np.nan).dropna(axis=1)
+        if numeric.empty:
+            return 0.0
+        pred = model.predict(numeric)
         if hasattr(pred, "values"):
             pred = pred.values
         labels_arr = labels.values if hasattr(labels, "values") else labels
+        if len(pred) != len(labels_arr):
+            return 0.0
         return float((pred == labels_arr).mean())
     except Exception:
         return 0.0

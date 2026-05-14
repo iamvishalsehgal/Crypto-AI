@@ -20,6 +20,14 @@ from omnitrade.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _ODDS_API_BASE = "https://api.the-odds-api.com/v4"
+_ESPN_API_BASE = "https://site.api.espn.com/apis/site/v2/sports"
+
+# sport_key → ESPN sport/league path for scoreboard endpoint
+_ESPN_SPORT_PATH: Dict[str, str] = {
+    "basketball_nba": "basketball/nba",
+    "americanfootball_nfl": "football/nfl",
+    "soccer_epl": "soccer/eng.1",
+}
 
 
 class BettingDataCollector:
@@ -69,7 +77,8 @@ class BettingDataCollector:
             return cached["data"].copy()
 
         if not self.has_api_key:
-            return self._mock_odds(sport_key)
+            logger.warning("No Odds API key — cannot fetch live odds for %s. Set BETTING_ODDS_API_KEY.", sport_key)
+            return pd.DataFrame()
 
         try:
             url = f"{_ODDS_API_BASE}/sports/{sport_key}/odds"
@@ -156,41 +165,50 @@ class BettingDataCollector:
         sport_key: str,
         days_back: int = 365,
     ) -> pd.DataFrame:
-        """Fetch historical match results for backtesting.
+        """Fetch historical match results for backtesting and training.
 
-        Uses The Odds API historical endpoint (paid tier). Falls back to
-        mock data when API key is missing or on free tier.
+        Primary: The Odds API historical endpoint (paid tier).
+        Fallback: ESPN public API (free, no key — scores only).
         """
         cache_key = f"history:{sport_key}:{days_back}"
         cached = self._cache.get(cache_key)
         if cached and time.time() - cached["ts"] < 3600:
             return cached["data"].copy()
 
-        if not self.has_api_key:
-            return self._mock_history(sport_key, days_back)
+        # ── Try The Odds API first ────────────────────────────────
+        if self.has_api_key:
+            try:
+                url = f"{_ODDS_API_BASE}/sports/{sport_key}/odds-history"
+                resp = requests.get(
+                    url,
+                    params={
+                        "apiKey": self._api_key,
+                        "regions": "us",
+                        "markets": "h2h",
+                        "dateFormat": "iso",
+                        "daysBack": str(days_back),
+                    },
+                    timeout=30,
+                )
+                if resp.status_code == 422:
+                    logger.info("Odds API history requires paid tier — using ESPN fallback")
+                else:
+                    resp.raise_for_status()
+                    data = resp.json().get("data", [])
+                    if data:
+                        df = self._parse_odds_history(data)
+                        self._cache[cache_key] = {"ts": time.time(), "data": df}
+                        return df
+            except requests.RequestException as exc:
+                logger.warning("Odds API history failed: %s — using ESPN fallback", exc)
 
-        try:
-            url = f"{_ODDS_API_BASE}/sports/{sport_key}/odds-history"
-            resp = requests.get(
-                url,
-                params={
-                    "apiKey": self._api_key,
-                    "regions": "us",
-                    "markets": "h2h",
-                    "dateFormat": "iso",
-                    "daysBack": str(days_back),
-                },
-                timeout=30,
-            )
-            if resp.status_code == 422:
-                logger.warning("Historical odds require paid API tier — using mock data")
-                return self._mock_history(sport_key, days_back)
-            resp.raise_for_status()
-            data = resp.json().get("data", [])
-        except requests.RequestException as exc:
-            logger.error("Historical odds failed for %s: %s", sport_key, exc)
-            return self._mock_history(sport_key, days_back)
+        # ── ESPN fallback (real scores, free, no API key) ─────────
+        df = self._fetch_historical_espn(sport_key, days_back)
+        self._cache[cache_key] = {"ts": time.time(), "data": df}
+        return df
 
+    @staticmethod
+    def _parse_odds_history(data: list) -> pd.DataFrame:
         rows = []
         for entry in data:
             rows.append({
@@ -202,10 +220,102 @@ class BettingDataCollector:
                 "away_score": entry.get("scores", {}).get("away", None),
                 "completed": entry.get("completed", False),
             })
+        return pd.DataFrame(rows)
 
-        df = pd.DataFrame(rows)
-        self._cache[cache_key] = {"ts": time.time(), "data": df}
+    # ------------------------------------------------------------------
+    # ESPN public API (free — scores + outcomes, no odds)
+    # ------------------------------------------------------------------
+
+    def _fetch_historical_espn(
+        self, sport_key: str, days_back: int = 365
+    ) -> pd.DataFrame:
+        """Fetch real historical scores from ESPN public API.
+
+        Samples ~1 date per week over the lookback window. ESPN does not
+        require an API key. Returns completed games with scores.
+        """
+        espn_path = _ESPN_SPORT_PATH.get(sport_key)
+        if not espn_path:
+            logger.warning("No ESPN mapping for sport key %s", sport_key)
+            return pd.DataFrame()
+
+        today = datetime.now(timezone.utc).date()
+        interval = max(days_back // 40, 3)  # ~40 samples, min 3-day spacing
+
+        all_games: List[Dict[str, Any]] = []
+        seen_matches: set = set()
+
+        for offset in range(0, days_back, interval):
+            date_str = pd.Timestamp(today - pd.Timedelta(days=offset)).strftime("%Y%m%d")
+            try:
+                url = f"{_ESPN_API_BASE}/{espn_path}/scoreboard"
+                resp = requests.get(
+                    url, params={"dates": date_str}, timeout=10,
+                )
+                time.sleep(0.05)  # Be polite to ESPN's servers
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                day_games = self._parse_espn_scoreboard(data, date_str)
+                for g in day_games:
+                    mid = g.get("match_id", "")
+                    if mid and mid not in seen_matches:
+                        seen_matches.add(mid)
+                        all_games.append(g)
+            except Exception:
+                continue
+
+        if not all_games:
+            logger.warning("ESPN returned no historical games for %s (%d day lookback)", sport_key, days_back)
+            return pd.DataFrame()
+
+        df = pd.DataFrame(all_games)
+        df["commence_time"] = pd.to_datetime(df["commence_time"], errors="coerce")
+        df = df.sort_values("commence_time", ascending=False).reset_index(drop=True)
+        logger.info(
+            "ESPN: %d historical games for %s over %d days",
+            len(df), sport_key, days_back,
+        )
         return df
+
+    @staticmethod
+    def _parse_espn_scoreboard(data: dict, date_str: str) -> List[Dict[str, Any]]:
+        games = []
+        for event in data.get("events", []):
+            comps = event.get("competitions", [{}])[0]
+            competitors = comps.get("competitors", [])
+            status = comps.get("status", {})
+
+            # Only include completed games (soccer uses STATUS_FULL_TIME)
+            status_name = status.get("type", {}).get("name", "")
+            if status_name not in ("STATUS_FINAL", "STATUS_FULL_TIME"):
+                continue
+
+            home = away = None
+            home_score = away_score = None
+            for t in competitors:
+                if t.get("homeAway") == "home":
+                    home = t.get("team", {}).get("displayName", "")
+                    home_score = int(t.get("score", 0)) if t.get("score") else None
+                else:
+                    away = t.get("team", {}).get("displayName", "")
+                    away_score = int(t.get("score", 0)) if t.get("score") else None
+
+            if not home or not away:
+                continue
+
+            commence = comps.get("date", date_str)
+            games.append({
+                "match_id": event.get("id", ""),
+                "home_team": home,
+                "away_team": away,
+                "commence_time": commence,
+                "home_score": home_score,
+                "away_score": away_score,
+                "completed": True,
+                "source": "espn",
+            })
+        return games
 
     # ------------------------------------------------------------------
     # Live scores
@@ -289,55 +399,3 @@ class BettingDataCollector:
         if has_draw:
             df["implied_draw_pct"] = df["implied_draw_pct"] / margin
         return df
-
-    # ------------------------------------------------------------------
-    # Mock data (for paper trading without API key)
-    # ------------------------------------------------------------------
-
-    def _mock_odds(self, sport_key: str) -> pd.DataFrame:
-        sport_name = sport_key.replace("_", " ").title()
-        now = datetime.now(timezone.utc).isoformat()
-        return pd.DataFrame([
-            {
-                "home_team": f"{sport_name} Home A",
-                "away_team": f"{sport_name} Away A",
-                "bookmaker": "pinnacle",
-                "commence_time": now,
-                "home_odds": -150,
-                "away_odds": 130,
-                "draw_odds": 220,
-                "implied_home_pct": 0.58,
-                "implied_away_pct": 0.42,
-                "implied_draw_pct": 0.31,
-            },
-            {
-                "home_team": f"{sport_name} Home B",
-                "away_team": f"{sport_name} Away B",
-                "bookmaker": "pinnacle",
-                "commence_time": now,
-                "home_odds": 110,
-                "away_odds": -130,
-                "draw_odds": 240,
-                "implied_home_pct": 0.45,
-                "implied_away_pct": 0.55,
-                "implied_draw_pct": 0.29,
-            },
-        ]).pipe(self._add_implied_probabilities)
-
-    def _mock_history(self, sport_key: str, days_back: int) -> pd.DataFrame:
-        sport_name = sport_key.replace("_", " ").title()
-        import numpy as np
-        dates = pd.date_range(end=datetime.now(timezone.utc), periods=min(days_back, 200), freq="D")
-        np.random.seed(hash(sport_key) % 2**31)
-        return pd.DataFrame([
-            {
-                "match_id": f"mock_{sport_key}_{i}",
-                "home_team": f"{sport_name} Home {i % 10}",
-                "away_team": f"{sport_name} Away {i % 10}",
-                "commence_time": d.isoformat(),
-                "home_score": np.random.poisson(1.5),
-                "away_score": np.random.poisson(1.2),
-                "completed": True,
-            }
-            for i, d in enumerate(dates)
-        ])
