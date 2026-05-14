@@ -1,11 +1,13 @@
 {
   "weights": {
-    "xgboost": 0.6243,
-    "lightgbm": 0.5729
+    "xgboost": 0.3941,
+    "lightgbm": 0.3996
   },
-  "last_updated": "2026-05-12T20:47:26.498732+00:00",
+  "last_updated": "2026-05-14T11:26:44.055702+00:00",
   "models": [
     "xgboost",
     "lightgbm"
-  ]
+  ],
+  "training_days": 1825,
+  "timeframe": "1d"
 }

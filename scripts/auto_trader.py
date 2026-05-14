@@ -36,6 +36,8 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
+
 # ── Project path ─────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -47,6 +49,7 @@ from omnitrade.config.settings import settings
 from omnitrade.config.asset_types import AssetType, UnifiedSignal
 from omnitrade.utils.logger import get_logger
 from omnitrade.data.collectors.market_data import MarketDataCollector
+from omnitrade.ensemble.voting_system import EnsembleVoter
 from omnitrade.features.technical import TechnicalFeatures
 from omnitrade.risk.risk_manager import RiskManager
 from omnitrade.risk.safety import SafetyGuard
@@ -368,17 +371,56 @@ class SignalGenerator:
 # =====================================================================
 
 
-def make_strategy(tech: TechnicalFeatures):
-    """Build a backtest strategy function using the existing SignalGenerator.
+def _load_backtest_models() -> EnsembleVoter:
+    """Load trained ML models from disk and register them with an EnsembleVoter."""
+    project_root = Path(__file__).resolve().parent.parent
+    models_dir = project_root / "models" / "saved"
+    ensemble = EnsembleVoter(settings)
 
-    For each candle, computes technical features and generates a signal.
+    for name, cls_path in [
+        ("xgboost", "omnitrade.models.xgboost_model.XGBoostTrader"),
+        ("lightgbm", "omnitrade.models.lightgbm_model.LightGBMTrader"),
+    ]:
+        model_path = models_dir / f"{name}_model"
+        if model_path.exists():
+            try:
+                mod_path, cls_name = cls_path.rsplit(".", 1)
+                mod = __import__(mod_path, fromlist=[cls_name])
+                model_cls = getattr(mod, cls_name)
+                model = model_cls(settings)
+                model.load_model(str(model_path))
+                ensemble.register_model(name, model)
+                logger.info("Backtest loaded %s model from %s", name, model_path)
+            except Exception as exc:
+                logger.warning("Backtest failed to load %s: %s", name, exc)
+
+    return ensemble
+
+
+def _numeric_feature_cols(features: pd.DataFrame) -> list:
+    """Return numeric feature columns (exclude timestamp, datetime, object, signal)."""
+    exclude = {"signal", "timestamp"}
+    return [
+        c for c in features.columns
+        if c not in exclude and pd.api.types.is_numeric_dtype(features[c])
+    ]
+
+
+def make_strategy(tech: TechnicalFeatures, ensemble: EnsembleVoter):
+    """Build a backtest strategy function using the ML ensemble voter.
+
+    For each candle, computes technical features and runs the ensemble vote.
     BUY signals open long positions; SELL signals close the position.
-    Returns ``None`` (no action) for HOLD signals or when confidence is too low.
+    Returns ``None`` (no action) for HOLD signals or when should_execute fails.
+
+    Falls back to SignalGenerator if ensemble has no models loaded.
 
     Parameters
     ----------
     tech:
         Initialised TechnicalFeatures instance for indicator computation.
+    ensemble:
+        Initialised EnsembleVoter with trained models loaded.
 
     Returns
     -------
@@ -386,21 +428,45 @@ def make_strategy(tech: TechnicalFeatures):
         ``strategy(data, idx) -> dict | None`` compatible with
         ``BacktestEngine.run()``.
     """
+    _FEATURE_COLS_CACHE: list = []
 
     def strategy(data: pd.DataFrame, idx: int):
+        nonlocal _FEATURE_COLS_CACHE
         if idx < 60:  # need enough warm-up candles for indicators
             return None
         window = data.iloc[max(0, idx - 499): idx + 1]
         try:
-            features = tech.compute_all(window).dropna()
+            features = tech.compute_all(window).ffill().bfill().fillna(0)
         except Exception:
             return None
         if features.empty or len(features) < 2:
             return None
 
-        latest = features.iloc[-1].to_dict()
-        prev = features.iloc[-2].to_dict()
-        sig = SignalGenerator.generate(latest, prev)
+        latest = features.iloc[-1:]
+
+        # ── ML ensemble path ──
+        if ensemble._models:
+            if not _FEATURE_COLS_CACHE:
+                _FEATURE_COLS_CACHE = _numeric_feature_cols(features)
+            try:
+                X = latest[_FEATURE_COLS_CACHE]
+                vote = ensemble.vote(X)
+            except Exception:
+                return None
+
+            if ensemble.should_execute(vote, min_confidence=0.65):
+                price = float(data["close"].iloc[idx])
+                amount = BACKTEST_STARTING_BALANCE * BACKTEST_POSITION_SIZE_PCT / price
+                if vote["signal"] == "BUY":
+                    return {"side": "buy", "amount": amount}
+                elif vote["signal"] == "SELL":
+                    return {"side": "close"}
+            return None
+
+        # ── Fallback: indicator confluence ──
+        latest_dict = features.iloc[-1].to_dict()
+        prev_dict = features.iloc[-2].to_dict()
+        sig = SignalGenerator.generate(latest_dict, prev_dict)
 
         if sig["signal"] == "BUY" and sig["confidence"] >= BACKTEST_MIN_CONFIDENCE:
             price = float(data["close"].iloc[idx])
@@ -463,6 +529,11 @@ def run_backtest(
     tech = TechnicalFeatures(settings)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
+    # Load trained ML models for ensemble-based backtesting
+    ensemble = _load_backtest_models()
+    model_count = len(ensemble._models)
+    logger.info("Backtest ensemble: %d models loaded", model_count)
+
     # Use daily timeframe for longer backtests, hourly for shorter ones
     if backtest_days <= 40:
         timeframe = "1h"
@@ -490,7 +561,7 @@ def run_backtest(
             continue
 
         engine = BacktestEngine(settings, initial_balance=initial_balance)
-        strategy = make_strategy(tech)
+        strategy = make_strategy(tech, ensemble)
         result = engine.run(strategy, ohlcv)
 
         symbol_results[symbol] = {
