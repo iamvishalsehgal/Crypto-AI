@@ -123,13 +123,23 @@ class SignalGeneratorAgent:
                         janus_blend.get("confidence", 0.0),
                     )
                 # Merge JANUS blend with ensemble result.
-                # Prefer ensemble confidence when JANUS has no calibrated weights
-                # and produces 0.0 (e.g. from all-HOLD with empty outcomes).
+                # When JANUS has no real outcomes (empty outcome dict), any
+                # blend it produces is uncalibrated — prefer the ensemble.
+                janus_weights = self._janus.get_weights()
+                janus_has_data = bool(self._janus._outcomes or janus_weights)
                 janus_conf = janus_blend.get("confidence", result.get("confidence"))
-                if janus_conf == 0.0 and not self._janus.get_weights():
-                    pass  # keep ensemble result
+                janus_signal = janus_blend.get("signal", result.get("signal"))
+                ensemble_conf = result.get("confidence", 0.0)
+
+                if not janus_has_data:
+                    pass  # no outcomes, no weights — keep ensemble
+                elif (
+                    janus_signal == result.get("signal")
+                    and janus_conf < ensemble_conf
+                ):
+                    pass  # JANUS agrees on direction but weaker — keep ensemble
                 else:
-                    result["signal"] = janus_blend.get("signal", result.get("signal"))
+                    result["signal"] = janus_signal
                     result["confidence"] = janus_conf
                 result["contested"] = janus_blend.get("contested", False)
                 result["direction_scores"] = janus_blend.get("direction_scores", {})
