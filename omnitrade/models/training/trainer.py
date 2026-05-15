@@ -85,7 +85,7 @@ class ModelTrainer:
         train_end = int(n * train_ratio)
         val_end = int(n * (train_ratio + val_ratio))
 
-        feature_cols = [c for c in features_df.columns if c != target_col]
+        feature_cols = [c for c in features_df.columns if c != target_col and pd.api.types.is_numeric_dtype(features_df[c])]
 
         X_train = features_df.iloc[:train_end][feature_cols]
         X_val = features_df.iloc[train_end:val_end][feature_cols]
@@ -178,11 +178,14 @@ class ModelTrainer:
             oos_trainer.scaler = trainer.scaler  # reuse training scaler
             oos_data = features_df.iloc[train_end:val_end]
             if len(oos_data) > sequence_length:
-                oos_feature_cols = [c for c in oos_data.columns if c != target_col]
+                oos_feature_cols = [c for c in oos_data.columns if c != target_col and pd.api.types.is_numeric_dtype(oos_data[c])]
                 oos_features = trainer.scaler.transform(
                     oos_data[oos_feature_cols].values.astype(np.float32)
                 )
                 oos_targets = oos_data[target_col].values.astype(np.int64)
+                # Remap labels from {-1, 0, 1} to {0, 1, 2} for CrossEntropyLoss
+                if (oos_targets < 0).any():
+                    oos_targets = oos_targets + 1
 
                 X_oos_list = []
                 y_oos_list = []

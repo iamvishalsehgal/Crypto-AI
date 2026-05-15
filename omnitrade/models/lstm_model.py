@@ -209,6 +209,10 @@ class LSTMTrainer:
         features = data[feature_cols].values.astype(np.float32)
         targets = data[target_col].values.astype(np.int64)
 
+        # Remap labels from {-1, 0, 1} to {0, 1, 2} for CrossEntropyLoss
+        if (targets < 0).any():
+            targets = targets + 1
+
         # Build sliding windows first (on raw, unscaled data).
         X_seqs: List[np.ndarray] = []
         y_seqs: List[int] = []
