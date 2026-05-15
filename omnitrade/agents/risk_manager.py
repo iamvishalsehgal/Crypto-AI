@@ -22,7 +22,7 @@ from omnitrade.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_MIN_CONFIDENCE = 0.65
+_MIN_CONFIDENCE = 0.35  # lowered for paper mode — allows single-model conviction
 _SIGNAL_COOLDOWN = 300  # seconds between same (symbol, direction) signals
 
 
@@ -102,16 +102,14 @@ class RiskManagerAgent:
                 "confidence": event.confidence,
                 "individual_predictions": event.individual_predictions,
             }
-            if not self._ensemble.should_execute(vote_result, min_confidence=_MIN_CONFIDENCE):
+            if not self._ensemble.should_execute(vote_result, min_confidence=_MIN_CONFIDENCE, min_agree=1):
                 logger.info("%s rejected — ensemble gate", event.symbol)
                 self._breaker.record_failure()
                 return None
 
         # Determine asset type for position sizing
-        try:
-            asset_type = AssetType(event.asset_type.upper())
-        except ValueError:
-            asset_type = AssetType.CRYPTO
+        at = event.asset_type.lower()
+        asset_type = AssetType(at) if at in ("crypto", "stock", "bet") else AssetType.CRYPTO
 
         # Position sizing — use default balance if unavailable
         balance = 10_000.0

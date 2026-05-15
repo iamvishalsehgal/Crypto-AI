@@ -352,8 +352,8 @@ class AutoRetrainer:
     @staticmethod
     def _generate_labels(
         features: pd.DataFrame,
-        forward_days: int = 3,
-        threshold: float = 0.02,
+        forward_days: int = 7,
+        threshold: float = 0.005,
     ) -> pd.Series:
         """Generate BUY(1)/SELL(-1)/HOLD(0) labels from forward returns."""
         close = features["close"].values

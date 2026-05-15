@@ -125,10 +125,7 @@ class ExecutionAgent:
             event.price,
         )
 
-        try:
-            asset_type = AssetType(event.asset_type.upper())
-        except ValueError:
-            asset_type = AssetType.CRYPTO
+        asset_type = AssetType(event.asset_type.lower()) if event.asset_type.lower() in ("crypto", "stock", "bet") else AssetType.CRYPTO
 
         signal = UnifiedSignal(
             asset_type=asset_type,
@@ -170,10 +167,7 @@ class ExecutionAgent:
             event.amount,
         )
 
-        try:
-            asset_type = AssetType(event.asset_type.upper())
-        except ValueError:
-            asset_type = AssetType.CRYPTO
+        asset_type = AssetType(event.asset_type.lower()) if event.asset_type.lower() in ("crypto", "stock", "bet") else AssetType.CRYPTO
 
         result = None
         if asset_type == AssetType.CRYPTO and self._router.crypto_executor:
