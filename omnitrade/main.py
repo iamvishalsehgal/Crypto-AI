@@ -45,6 +45,7 @@ from omnitrade.config.asset_types import AssetType, UnifiedSignal
 from omnitrade.data.collectors.market_data import MarketDataCollector
 from omnitrade.data.storage.database import MongoDBStorage
 from omnitrade.ensemble.voting_system import EnsembleVoter
+from omnitrade.ensemble.janus_blender import JanusBlender
 from omnitrade.execution.asset_router import AssetRouter
 from omnitrade.features.technical import TechnicalFeatures
 from omnitrade.monitoring.telegram_bot import TelegramNotifier
@@ -131,6 +132,12 @@ class TradingBot:
 
         # ---- Ensemble ----
         self.ensemble = EnsembleVoter(self._settings)
+
+        # JANUS meta-blender: softmax weight calibration with constraints,
+        # disagreement penalty, and regime detection
+        self.janus = JanusBlender(
+            model_types={"xgboost": "tree", "lightgbm": "tree", "lstm": "neural"},
+        )
 
         # ---- Risk & Execution ----
         self.risk_manager = RiskManager(self._settings)
@@ -426,6 +433,7 @@ class TradingBot:
             bus=bus,
             ensemble=self.ensemble,
             stock_models=self.stock_models,
+            janus=self.janus,
         )
         agents.append(signal_agent)
 
@@ -449,6 +457,7 @@ class TradingBot:
             retrainer=self.retrainer,
             pnl_tracker=self.pnl_tracker,
             risk_manager=self.risk_manager,
+            janus=self.janus,
         )
         agents.append(exec_agent)
 
@@ -485,6 +494,32 @@ class TradingBot:
                 await asyncio.sleep(60)
 
         background_tasks.append(asyncio.create_task(retrain_loop()))
+
+        # JANUS weight sync: recalibrate constrained weights → sync to ensemble
+        async def janus_weight_sync():
+            while self._running:
+                try:
+                    model_weights = self.ensemble.get_model_weights()
+                    if model_weights and self.janus._outcomes:
+                        calibrated = self.janus.calibrate_weights(
+                            model_names=list(model_weights.keys())
+                        )
+                        for name, weight in calibrated.items():
+                            if name in model_weights:
+                                self.ensemble.update_weight(name, weight)
+                        regime = self.janus.detect_regime()
+                        if regime["regime"] != "MIXED":
+                            logger.info(
+                                "JANUS regime: %s (diff=%.3f, conf=%.2f)",
+                                regime["regime"],
+                                regime["weight_diff"],
+                                regime["confidence"],
+                            )
+                except Exception:
+                    logger.exception("JANUS weight sync failed")
+                await asyncio.sleep(300)  # every 5 minutes
+
+        background_tasks.append(asyncio.create_task(janus_weight_sync()))
 
         # Health check loop
         async def health_loop():

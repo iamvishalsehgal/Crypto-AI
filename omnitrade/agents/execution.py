@@ -51,6 +51,7 @@ class ExecutionAgent:
         retrainer: Optional[object] = None,
         pnl_tracker: Optional[PnLTracker] = None,
         risk_manager: Optional[RiskManager] = None,
+        janus: Optional[object] = None,
     ) -> None:
         self._bus = bus
         self._router = router
@@ -59,6 +60,7 @@ class ExecutionAgent:
         self._retrainer = retrainer
         self._pnl = pnl_tracker or PnLTracker()
         self._risk = risk_manager
+        self._janus = janus
 
     async def run(self) -> None:
         """Consume approved signals and exit signals, execute trades."""
@@ -188,6 +190,16 @@ class ExecutionAgent:
                 )
                 if self._risk:
                     self._risk.record_return(closed.pnl_pct / 100.0)
+
+                # Record per-model outcome for JANUS weight calibration
+                if self._janus and hasattr(closed, "model_predictions"):
+                    actual_return = closed.pnl_pct / 100.0
+                    for model_name, prediction in closed.model_predictions.items():
+                        self._janus.record_outcome(
+                            model_name=model_name,
+                            predicted_signal=prediction,
+                            actual_return=actual_return,
+                        )
 
         if self._notifier:
             await self._notifier.send_message(

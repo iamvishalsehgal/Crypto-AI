@@ -26,6 +26,7 @@ class SignalGeneratorAgent:
         bus: Shared event bus.
         ensemble: EnsembleVoter with registered models for crypto.
         stock_models: StockModelFactory for stock tickers (optional).
+        janus: JanusBlender for disagreement-penalised blending (optional).
     """
 
     def __init__(
@@ -33,10 +34,12 @@ class SignalGeneratorAgent:
         bus: EventBus,
         ensemble: EnsembleVoter,
         stock_models: Optional[object] = None,
+        janus: Optional[object] = None,
     ) -> None:
         self._bus = bus
         self._ensemble = ensemble
         self._stock_models = stock_models
+        self._janus = janus
 
     async def run(self) -> None:
         """Consume FeatureEvents, generate signals, publish SignalEvents."""
@@ -91,6 +94,29 @@ class SignalGeneratorAgent:
 
             logger.info("%s: voting with %d models, %d features", event.symbol, len(model_weights), len(numeric.columns))
             result = self._ensemble.vote({"features": numeric})
+
+            # Apply JANUS-style disagreement penalty if blender is configured
+            if self._janus is not None:
+                janus_blend = self._janus.blend(
+                    individual_predictions=result.get("individual_predictions", {}),
+                    convictions={
+                        k: v / max(sum(result.get("weighted_scores", {}).values()), 1)
+                        for k, v in result.get("weighted_scores", {}).items()
+                    },
+                    weights=self._janus.get_weights() or model_weights,
+                )
+                if janus_blend.get("contested"):
+                    logger.info(
+                        "%s: CONTESTED signal — penalty applied (%.4f → %.4f)",
+                        event.symbol,
+                        result.get("confidence", 0.0),
+                        janus_blend.get("confidence", 0.0),
+                    )
+                # Merge JANUS blend with ensemble result
+                result["signal"] = janus_blend.get("signal", result.get("signal"))
+                result["confidence"] = janus_blend.get("confidence", result.get("confidence"))
+                result["contested"] = janus_blend.get("contested", False)
+                result["direction_scores"] = janus_blend.get("direction_scores", {})
 
         return SignalEvent(
             symbol=event.symbol,
