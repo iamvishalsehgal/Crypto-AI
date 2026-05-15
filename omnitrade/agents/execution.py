@@ -145,9 +145,6 @@ class ExecutionAgent:
 
             self._pnl.record_entry(result)
 
-            if self._risk:
-                self._risk.record_return(0.0)
-
             if self._notifier:
                 await self._notifier.send_trade_alert(result)
 

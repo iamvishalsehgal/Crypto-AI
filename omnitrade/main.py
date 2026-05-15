@@ -86,11 +86,10 @@ class TradingBot:
         self._running = False
         self._settings = settings.model_copy(deep=True)
 
-        # Override sandbox based on mode (on our copy, not the global)
+        # Live mode disables sandbox for real orders. Paper mode respects
+        # the env-var / config setting so public API works without keys.
         if mode == "live":
             self._settings.exchange.sandbox_mode = False
-        else:
-            self._settings.exchange.sandbox_mode = True
 
         # Override enabled assets if specified
         if asset_types:
