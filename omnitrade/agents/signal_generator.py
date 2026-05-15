@@ -97,12 +97,22 @@ class SignalGeneratorAgent:
 
             # Apply JANUS-style disagreement penalty if blender is configured
             if self._janus is not None:
+                # Build per-model conviction from individual weighted scores.
+                # Each model contributes weight to its signal direction; its
+                # conviction is its weight fraction of the total for that direction.
+                indiv = result.get("individual_predictions", {})
+                w_scores = result.get("weighted_scores", {})
+                total_score = max(sum(w_scores.values()), 1)
+                per_model_conviction: Dict[str, float] = {}
+                for mname, msignal in indiv.items():
+                    direction_score = w_scores.get(msignal, 0.0)
+                    per_model_conviction[mname] = (
+                        direction_score / total_score if total_score > 0 else 0.5
+                    )
+
                 janus_blend = self._janus.blend(
-                    individual_predictions=result.get("individual_predictions", {}),
-                    convictions={
-                        k: v / max(sum(result.get("weighted_scores", {}).values()), 1)
-                        for k, v in result.get("weighted_scores", {}).items()
-                    },
+                    individual_predictions=indiv,
+                    convictions=per_model_conviction,
                     weights=self._janus.get_weights() or model_weights,
                 )
                 if janus_blend.get("contested"):
@@ -112,9 +122,15 @@ class SignalGeneratorAgent:
                         result.get("confidence", 0.0),
                         janus_blend.get("confidence", 0.0),
                     )
-                # Merge JANUS blend with ensemble result
-                result["signal"] = janus_blend.get("signal", result.get("signal"))
-                result["confidence"] = janus_blend.get("confidence", result.get("confidence"))
+                # Merge JANUS blend with ensemble result.
+                # Prefer ensemble confidence when JANUS has no calibrated weights
+                # and produces 0.0 (e.g. from all-HOLD with empty outcomes).
+                janus_conf = janus_blend.get("confidence", result.get("confidence"))
+                if janus_conf == 0.0 and not self._janus.get_weights():
+                    pass  # keep ensemble result
+                else:
+                    result["signal"] = janus_blend.get("signal", result.get("signal"))
+                    result["confidence"] = janus_conf
                 result["contested"] = janus_blend.get("contested", False)
                 result["direction_scores"] = janus_blend.get("direction_scores", {})
 

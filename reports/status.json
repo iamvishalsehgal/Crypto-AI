@@ -1,13 +1,11 @@
 {
-  "last_updated": "2026-05-15T17:07:40.185901+00:00",
-  "cycle": 5,
+  "last_updated": "2026-05-15T17:24:35.453161+00:00",
   "mode": "paper",
   "portfolio": {
     "balance_usd": 21000.0,
     "equity": 21000.0,
-    "return_pct": 0.0,
+    "return_pct": 110.0,
     "open_positions": 0,
-    "unrealized_pnl": 0,
     "lanes": {
       "crypto": {
         "USDT": {
@@ -30,21 +28,9 @@
           "total": 1000.0
         }
       }
-    },
-    "safety_status": {
-      "halted": false,
-      "halt_reason": "",
-      "daily_fees": 0.0,
-      "daily_fee_cap": 50.0,
-      "daily_trades": 0,
-      "hourly_trades": 0,
-      "consecutive_losses": 0,
-      "peak_equity": 21000.0,
-      "last_trade_times": {}
-    },
-    "positions": []
+    }
   },
-  "pnl_summary": {
+  "pnl": {
     "total_trades": 0,
     "closed_trades": 0,
     "open_trades": 0,
@@ -56,16 +42,9 @@
     "best_trade": 0,
     "worst_trade": 0
   },
-  "last_signals": {
-    "BTC/USDT": {
-      "symbol": "BTC/USDT",
-      "signal": "PAUSED",
-      "reason": "circuit breaker open"
-    },
-    "ETH/USDT": {
-      "symbol": "ETH/USDT",
-      "signal": "PAUSED",
-      "reason": "circuit breaker open"
-    }
+  "safety_status": {
+    "halted": false,
+    "halt_reason": "",
+    "circuit_breaker_tripped": false
   }
 }

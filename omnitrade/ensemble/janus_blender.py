@@ -338,7 +338,18 @@ class JanusBlender:
 
         if bull_score == 0 and bear_score == 0:
             direction = _HOLD
-            final_conviction = 0.0
+            # When all models agree on HOLD, reflect alignment strength
+            # rather than zeroing confidence.  This prevents the blender
+            # from overriding a high-confidence HOLD from the ensemble voter.
+            max_possible = sum(weights.values()) if weights else 1.0
+            total_hold_weight = sum(
+                weights.get(m, 0)
+                for m, s in individual_predictions.items()
+                if s == _HOLD
+            )
+            final_conviction = (
+                min(1.0, total_hold_weight / max_possible) if max_possible > 0 else 0.0
+            )
 
         return {
             "signal": direction,
