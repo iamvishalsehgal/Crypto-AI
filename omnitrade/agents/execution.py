@@ -22,6 +22,7 @@ from omnitrade.data.storage.database import MongoDBStorage
 from omnitrade.execution.asset_router import AssetRouter
 from omnitrade.monitoring.telegram_bot import TelegramNotifier
 from omnitrade.utils.logger import get_logger
+from omnitrade.utils.pnl_tracker import PnLTracker
 
 logger = get_logger(__name__)
 
@@ -46,12 +47,14 @@ class ExecutionAgent:
         db: MongoDBStorage,
         notifier: Optional[TelegramNotifier] = None,
         retrainer: Optional[object] = None,
+        pnl_tracker: Optional[PnLTracker] = None,
     ) -> None:
         self._bus = bus
         self._router = router
         self._db = db
         self._notifier = notifier
         self._retrainer = retrainer
+        self._pnl = pnl_tracker or PnLTracker()
 
     async def run(self) -> None:
         """Consume approved signals and exit signals, execute trades."""
@@ -77,12 +80,15 @@ class ExecutionAgent:
             while True:
                 try:
                     unified = self._router.get_unified_balance()
+                    pnl_summary = self._pnl.summary()
+                    total_equity = unified.get("total_usd_equivalent", 0) + pnl_summary.get("total_pnl", 0)
+                    return_pct = (total_equity - self._pnl.initial_balance) / self._pnl.initial_balance * 100 if self._pnl.initial_balance > 0 else 0.0
                     await self._bus.publish_portfolio(
                         PortfolioEvent(
                             balance_usd=unified.get("total_usd_equivalent", 0),
-                            equity=unified.get("total_usd_equivalent", 0),
-                            return_pct=0.0,
-                            open_positions=len(unified.get("positions", [])),
+                            equity=total_equity,
+                            return_pct=round(return_pct, 2),
+                            open_positions=pnl_summary.get("open_trades", 0),
                             lanes=unified.get("by_lane", {}),
                         )
                     )
@@ -133,6 +139,8 @@ class ExecutionAgent:
         if result.get("status") == "filled":
             logger.info("Trade EXECUTED: %s %s @ %.2f", event.symbol, event.signal, event.price)
 
+            self._pnl.record_entry(result)
+
             if self._notifier:
                 await self._notifier.send_trade_alert(result)
 
@@ -161,10 +169,19 @@ class ExecutionAgent:
         except ValueError:
             asset_type = AssetType.CRYPTO
 
+        result = None
         if asset_type == AssetType.CRYPTO and self._router.crypto_executor:
-            self._router.crypto_executor.close_position(event.symbol, event.price)
+            result = self._router.crypto_executor.close_position(event.symbol, event.price)
         elif asset_type == AssetType.STOCK and self._router.stock_executor:
-            self._router.stock_executor.close_position(event.symbol, event.price)
+            result = self._router.stock_executor.close_position(event.symbol, event.price)
+
+        if result:
+            closed = self._pnl.record_exit(event.symbol, event.price)
+            if closed:
+                logger.info(
+                    "PnL recorded: %s %s — $%.2f (%.1f%%)",
+                    event.symbol, event.reason, closed.pnl, closed.pnl_pct,
+                )
 
         if self._notifier:
             await self._notifier.send_message(

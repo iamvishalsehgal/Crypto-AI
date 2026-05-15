@@ -111,12 +111,16 @@ class PaperWallet:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
         else:
+            held = self._balances.get(base_asset, 0.0)
+            if held < filled_base:
+                raise ValueError(
+                    f"Naked short rejected: {symbol} sell {filled_base:.6f} {base_asset} "
+                    f"but only {held:.6f} held"
+                )
             self._balances[self.base_currency] = (
                 self._balances.get(self.base_currency, 0.0) + amount_quote - fee_cost
             )
-            self._balances[base_asset] = (
-                self._balances.get(base_asset, 0.0) - filled_base
-            )
+            self._balances[base_asset] = held - filled_base
             self._positions = [
                 p for p in self._positions if p["symbol"] != symbol
             ]

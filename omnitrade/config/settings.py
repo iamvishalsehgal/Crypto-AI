@@ -18,7 +18,7 @@ class ExchangeSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="EXCHANGE_")
 
-    name: str = Field(default="binance", description="Exchange identifier (ccxt-compatible)")
+    name: str = Field(default="bybit", description="Exchange identifier (ccxt-compatible)")
     api_key: str = Field(default="", description="Exchange API key")
     api_secret: str = Field(default="", description="Exchange API secret")
     sandbox_mode: bool = Field(default=True, description="Use exchange sandbox/testnet")

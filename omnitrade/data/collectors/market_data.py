@@ -312,6 +312,18 @@ class MarketDataCollector:
             try:
                 return fn(*args, **kwargs)
             except (
+                ccxt.AuthenticationError,
+                ccxt.PermissionDenied,
+            ) as exc:
+                # Geo-block (451), IP restriction, or invalid credentials —
+                # not transient, surface immediately with clear message
+                logger.error(
+                    "Exchange access denied for %s: %s — "
+                    "check API keys, IP allowlist, and geo-restrictions",
+                    self._settings.exchange.name, exc,
+                )
+                raise
+            except (
                 ccxt.NetworkError,
                 ccxt.ExchangeNotAvailable,
                 ccxt.RequestTimeout,

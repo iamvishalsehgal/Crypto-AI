@@ -51,6 +51,8 @@ from omnitrade.monitoring.telegram_bot import TelegramNotifier
 from omnitrade.monitoring.health_check import HealthChecker
 from omnitrade.risk.risk_manager import RiskManager
 from omnitrade.utils.logger import get_logger
+from omnitrade.utils.circuit_breaker import CircuitBreaker
+from omnitrade.utils.pnl_tracker import PnLTracker
 from omnitrade.learning import AutoRetrainer
 from omnitrade.risk.safety import SafetyGuard
 
@@ -134,6 +136,11 @@ class TradingBot:
         # ---- Risk & Execution ----
         self.risk_manager = RiskManager(self._settings)
         self.safety = SafetyGuard(self._settings)
+        self.pnl_tracker = PnLTracker()
+        self.circuit_breaker = CircuitBreaker(
+            threshold=self._settings.safety.kill_on_consecutive_losses,
+            cooldown=300,
+        )
 
         # AssetRouter (central dispatcher for all lanes)
         self.router = AssetRouter(
@@ -430,6 +437,7 @@ class TradingBot:
             safety=self.safety,
             settings=self._settings,
             ensemble=self.ensemble,
+            circuit_breaker=self.circuit_breaker,
         )
         agents.append(risk_agent)
 
@@ -440,6 +448,7 @@ class TradingBot:
             db=self.db,
             notifier=self.notifier,
             retrainer=self.retrainer,
+            pnl_tracker=self.pnl_tracker,
         )
         agents.append(exec_agent)
 
@@ -507,6 +516,7 @@ class TradingBot:
             while self._running:
                 try:
                     event: PortfolioEvent = await bus.consume_portfolio()
+                    pnl_summary = self.pnl_tracker.summary()
                     snapshot = {
                         "last_updated": datetime.now(timezone.utc).isoformat(),
                         "mode": self._mode,
@@ -517,9 +527,11 @@ class TradingBot:
                             "open_positions": event.open_positions,
                             "lanes": event.lanes,
                         },
+                        "pnl": pnl_summary,
                         "safety_status": {
                             "halted": self.safety.is_halted,
                             "halt_reason": getattr(self.safety, "_halt_reason", ""),
+                            "circuit_breaker_tripped": self.circuit_breaker.is_open,
                         },
                     }
                     status_path.parent.mkdir(parents=True, exist_ok=True)

@@ -17,6 +17,7 @@ from omnitrade.config.asset_types import AssetType
 from omnitrade.config.settings import Settings, settings as _default_settings
 from omnitrade.risk.risk_manager import RiskManager, PortfolioState
 from omnitrade.risk.safety import SafetyGuard
+from omnitrade.utils.circuit_breaker import CircuitBreaker
 from omnitrade.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -43,12 +44,14 @@ class RiskManagerAgent:
         safety: Optional[SafetyGuard] = None,
         settings: Optional[Settings] = None,
         ensemble: Optional[object] = None,
+        circuit_breaker: Optional[CircuitBreaker] = None,
     ) -> None:
         self._bus = bus
         self._risk = risk_manager
         self._safety = safety
         self._settings = settings or _default_settings
         self._ensemble = ensemble
+        self._breaker = circuit_breaker or CircuitBreaker()
         self._signal_cooldowns: Dict[Tuple[str, str], float] = {}
 
     async def run(self) -> None:
@@ -80,8 +83,17 @@ class RiskManagerAgent:
         if signal == "HOLD" or signal == "PASS":
             return None
 
+        # Circuit breaker gate — if too many failures, stop approving
+        if self._breaker.is_open:
+            logger.warning(
+                "%s rejected — circuit breaker open (%d consecutive failures)",
+                event.symbol, self._breaker._failures,
+            )
+            return None
+
         # Confidence gate
         if event.confidence < _MIN_CONFIDENCE:
+            self._breaker.record_failure()
             return None
 
         # Ensemble agreement gate (if available)
@@ -93,6 +105,7 @@ class RiskManagerAgent:
             }
             if not self._ensemble.should_execute(vote_result, min_confidence=_MIN_CONFIDENCE):
                 logger.info("%s rejected — ensemble gate", event.symbol)
+                self._breaker.record_failure()
                 return None
 
         # Determine asset type for position sizing
@@ -129,6 +142,7 @@ class RiskManagerAgent:
             # Check halted state
             if self._safety.is_halted:
                 logger.warning("%s rejected — safety halted: %s", event.symbol, self._safety._halt_reason)
+                self._breaker.record_failure()
                 return None
 
         # Signal cooldown — prevent pyramiding from rapid repeated signals
@@ -143,6 +157,7 @@ class RiskManagerAgent:
             return None
         self._signal_cooldowns[key] = now
 
+        self._breaker.record_success()
         return ApprovedSignalEvent(
             symbol=event.symbol,
             asset_type=event.asset_type,
