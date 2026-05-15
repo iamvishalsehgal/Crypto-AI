@@ -444,9 +444,10 @@ class LSTMTrainer:
         if not path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {path}")
 
-        # Allow sklearn StandardScaler in checkpoint (trusted local file)
-        torch.serialization.add_safe_globals([StandardScaler])
-        checkpoint = torch.load(path, map_location=self.device, weights_only=True)
+        # weights_only=False: trusted local checkpoint contains sklearn/numpy
+        # objects (StandardScaler) with NumPy 2.x DTypes unsupported by
+        # PyTorch 2.6 safe unpickler. File is written by save_model() above.
+        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
 
         self.model_type = checkpoint["model_type"]
         self.hidden_size = checkpoint["hidden_size"]
@@ -467,3 +468,37 @@ class LSTMTrainer:
         self.model.load_state_dict(checkpoint["model_state_dict"])
         self.model.eval()
         logger.info("Model loaded from %s (type=%s).", path, self.model_type)
+
+    def predict_dataframe(self, df: pd.DataFrame, seq_len: int = 60) -> int:
+        """Predict from a DataFrame — compatible with EnsembleVoter interface.
+
+        Scales features with the fitted scaler, takes the last *seq_len*
+        rows, converts to tensor, and returns the predicted integer label
+        (-1=SELL, 0=HOLD, 1=BUY).
+
+        Args:
+            df: Feature DataFrame (columns must match training features).
+            seq_len: Number of past time-steps to use.
+
+        Returns:
+            Integer label in {-1, 0, 1}.
+        """
+        if self.model is None or self.scaler is None:
+            return 0  # HOLD if not ready
+
+        numeric = df.select_dtypes(include=[np.number])
+        numeric = numeric.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        n_rows, n_feats = numeric.shape
+
+        if n_rows < seq_len:
+            return 0
+
+        # Take last seq_len rows, scale, reshape to (1, seq_len, n_feats)
+        window = numeric.values[-seq_len:].astype(np.float32)
+        window = self.scaler.transform(window)
+        X = torch.tensor(window, dtype=torch.float32).unsqueeze(0).to(self.device)
+
+        probs = self.predict(X)
+        pred = int(np.argmax(probs))
+        # Map from CrossEntropyLoss classes {0,1,2} → signals {-1,0,1}
+        return {0: -1, 1: 0, 2: 1}.get(pred, 0)

@@ -91,9 +91,8 @@ class RiskManagerAgent:
             )
             return None
 
-        # Confidence gate
+        # Confidence gate — skip low-confidence signals without penalising
         if event.confidence < _MIN_CONFIDENCE:
-            self._breaker.record_failure()
             return None
 
         # Ensemble agreement gate (if available)

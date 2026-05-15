@@ -200,12 +200,8 @@ class _LSTMStockAdapter:
 
     def predict(self, df: pd.DataFrame) -> str:
         try:
-            proba = self._trainer.predict(df)
-            if hasattr(proba, "iloc"):
-                proba = proba.iloc[-1].values if len(proba.shape) > 1 else proba.values
-            pred = int(np.argmax(proba))
-            mapped = {0: -1, 1: 0, 2: 1}.get(pred, 0)
-            return _INT_TO_SIGNAL.get(mapped, "HOLD")
+            pred = self._trainer.predict_dataframe(df)
+            return _INT_TO_SIGNAL.get(pred, "HOLD")
         except AttributeError:
             return "HOLD"
 

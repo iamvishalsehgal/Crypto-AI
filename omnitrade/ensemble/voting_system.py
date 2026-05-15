@@ -462,7 +462,9 @@ class EnsembleVoter:
         else:
             model_input = features
 
-        if hasattr(model, "predict") and callable(model.predict):
+        if hasattr(model, "predict_dataframe") and callable(model.predict_dataframe):
+            raw = model.predict_dataframe(model_input)
+        elif hasattr(model, "predict") and callable(model.predict):
             raw = model.predict(model_input)
         elif callable(model):
             raw = model(model_input)
