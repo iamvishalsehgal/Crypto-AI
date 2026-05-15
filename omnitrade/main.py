@@ -449,6 +449,7 @@ class TradingBot:
             notifier=self.notifier,
             retrainer=self.retrainer,
             pnl_tracker=self.pnl_tracker,
+            risk_manager=self.risk_manager,
         )
         agents.append(exec_agent)
 

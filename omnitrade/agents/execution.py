@@ -21,6 +21,7 @@ from omnitrade.config.asset_types import AssetType, UnifiedSignal
 from omnitrade.data.storage.database import MongoDBStorage
 from omnitrade.execution.asset_router import AssetRouter
 from omnitrade.monitoring.telegram_bot import TelegramNotifier
+from omnitrade.risk.risk_manager import RiskManager
 from omnitrade.utils.logger import get_logger
 from omnitrade.utils.pnl_tracker import PnLTracker
 
@@ -38,6 +39,7 @@ class ExecutionAgent:
         db: MongoDB storage for trade recording.
         notifier: Telegram bot for alerts (optional).
         retrainer: AutoRetrainer for trade outcome recording (optional).
+        risk_manager: RiskManager for adaptive position sizing (optional).
     """
 
     def __init__(
@@ -48,6 +50,7 @@ class ExecutionAgent:
         notifier: Optional[TelegramNotifier] = None,
         retrainer: Optional[object] = None,
         pnl_tracker: Optional[PnLTracker] = None,
+        risk_manager: Optional[RiskManager] = None,
     ) -> None:
         self._bus = bus
         self._router = router
@@ -55,6 +58,7 @@ class ExecutionAgent:
         self._notifier = notifier
         self._retrainer = retrainer
         self._pnl = pnl_tracker or PnLTracker()
+        self._risk = risk_manager
 
     async def run(self) -> None:
         """Consume approved signals and exit signals, execute trades."""
@@ -141,6 +145,9 @@ class ExecutionAgent:
 
             self._pnl.record_entry(result)
 
+            if self._risk:
+                self._risk.record_return(0.0)
+
             if self._notifier:
                 await self._notifier.send_trade_alert(result)
 
@@ -182,6 +189,8 @@ class ExecutionAgent:
                     "PnL recorded: %s %s — $%.2f (%.1f%%)",
                     event.symbol, event.reason, closed.pnl, closed.pnl_pct,
                 )
+                if self._risk:
+                    self._risk.record_return(closed.pnl_pct / 100.0)
 
         if self._notifier:
             await self._notifier.send_message(
