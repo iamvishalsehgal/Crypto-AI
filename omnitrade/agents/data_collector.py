@@ -27,6 +27,7 @@ _WS_TIMEFRAME = "1m"
 _REST_INTERVAL = 15  # seconds between REST polls for fallback/stock
 _STOCK_INTERVAL = 15
 _OHLCV_LOOKBACK = 500
+_SIGNAL_MIN_INTERVAL = 60  # minimum seconds between published events per symbol
 
 
 class DataCollectorAgent:
@@ -66,6 +67,8 @@ class DataCollectorAgent:
         )
         self._tasks: List[asyncio.Task] = []
         self._candle_buffers: Dict[str, pd.DataFrame] = {}
+        self._last_timestamps: Dict[str, int] = {}   # last published candle ts (unix ms)
+        self._last_published: Dict[str, float] = {}   # last publish time (monotonic s)
 
     # ------------------------------------------------------------------
     # Public API
@@ -157,6 +160,22 @@ class DataCollectorAgent:
                 merged = merged.sort_values("timestamp").tail(_OHLCV_LOOKBACK)
                 self._candle_buffers[symbol] = merged
 
+                # Throttle: only publish on a new candle or after min interval.
+                # On per-tick updates within the same forming candle, the features
+                # and signals don't meaningfully change — skip to reduce noise.
+                now = asyncio.get_event_loop().time()
+                latest_ts = int(merged["timestamp"].iloc[-1]) if "timestamp" in merged.columns else 0
+                last_ts = self._last_timestamps.get(symbol, 0)
+                last_pub = self._last_published.get(symbol, 0)
+                is_new_candle = latest_ts != last_ts
+                min_elapsed = (now - last_pub) >= _SIGNAL_MIN_INTERVAL
+
+                if not is_new_candle and not min_elapsed:
+                    continue  # same candle, too soon — skip
+
+                self._last_timestamps[symbol] = latest_ts
+                self._last_published[symbol] = now
+
                 await self._bus.publish_market_data(
                     MarketDataEvent(
                         symbol=symbol,
@@ -191,6 +210,7 @@ class DataCollectorAgent:
                         order_book=self._market.fetch_order_book(symbol),
                     )
                 )
+                self._last_published[symbol] = asyncio.get_event_loop().time()
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -213,6 +233,19 @@ class DataCollectorAgent:
                     continue
 
                 fundamentals = self._stock.fetch_fundamentals(ticker)
+
+                # Throttle: skip if same timestamp or too soon since last publish
+                now = asyncio.get_event_loop().time()
+                latest_ts = int(ohlcv["timestamp"].iloc[-1]) if "timestamp" in ohlcv.columns else 0
+                last_ts = self._last_timestamps.get(ticker, 0)
+                last_pub = self._last_published.get(ticker, 0)
+                is_new_candle = latest_ts != last_ts
+                min_elapsed = (now - last_pub) >= _SIGNAL_MIN_INTERVAL
+                if not is_new_candle and not min_elapsed:
+                    await asyncio.sleep(_STOCK_INTERVAL)
+                    continue
+                self._last_timestamps[ticker] = latest_ts
+                self._last_published[ticker] = now
 
                 await self._bus.publish_market_data(
                     MarketDataEvent(
