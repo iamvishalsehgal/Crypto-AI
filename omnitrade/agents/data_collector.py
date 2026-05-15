@@ -164,7 +164,12 @@ class DataCollectorAgent:
                 # On per-tick updates within the same forming candle, the features
                 # and signals don't meaningfully change — skip to reduce noise.
                 now = asyncio.get_event_loop().time()
-                latest_ts = int(merged["timestamp"].iloc[-1]) if "timestamp" in merged.columns else 0
+                # Timestamp column may be pandas Timestamp, datetime, or unix ms int.
+                ts_val = merged["timestamp"].iloc[-1] if "timestamp" in merged.columns else 0
+                try:
+                    latest_ts = int(ts_val)
+                except (TypeError, ValueError):
+                    latest_ts = int(pd.Timestamp(ts_val).timestamp() * 1000)
                 last_ts = self._last_timestamps.get(symbol, 0)
                 last_pub = self._last_published.get(symbol, 0)
                 is_new_candle = latest_ts != last_ts
@@ -236,7 +241,11 @@ class DataCollectorAgent:
 
                 # Throttle: skip if same timestamp or too soon since last publish
                 now = asyncio.get_event_loop().time()
-                latest_ts = int(ohlcv["timestamp"].iloc[-1]) if "timestamp" in ohlcv.columns else 0
+                ts_val = ohlcv["timestamp"].iloc[-1] if "timestamp" in ohlcv.columns else 0
+                try:
+                    latest_ts = int(ts_val)
+                except (TypeError, ValueError):
+                    latest_ts = int(pd.Timestamp(ts_val).timestamp() * 1000)
                 last_ts = self._last_timestamps.get(ticker, 0)
                 last_pub = self._last_published.get(ticker, 0)
                 is_new_candle = latest_ts != last_ts
