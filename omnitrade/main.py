@@ -214,6 +214,17 @@ class TradingBot:
                 except Exception as exc:
                     logger.warning("Failed to load crypto LightGBM: %s", exc)
 
+            lstm_path = models_dir / "lstm_model"
+            if lstm_path.exists():
+                try:
+                    from omnitrade.models.lstm_model import LSTMTrainer
+                    self._crypto_lstm = LSTMTrainer(self._settings, model_type="lstm")
+                    self._crypto_lstm.load_model(str(lstm_path))
+                    self.ensemble.register_model("lstm", self._crypto_lstm)
+                    logger.info("Loaded crypto LSTM model from %s", lstm_path)
+                except Exception as exc:
+                    logger.warning("Failed to load crypto LSTM: %s", exc)
+
             # Load ensemble weights from config
             weights_path = project_root / "config" / "ensemble_weights.json"
             if weights_path.exists() and self._crypto_xgb is not None:

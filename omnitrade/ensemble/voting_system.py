@@ -478,4 +478,8 @@ class EnsembleVoter:
         if isinstance(raw, (np.ndarray, list, pd.Series)):
             raw = raw[0] if len(raw) > 0 else 0
 
+        # If still array-like (e.g. LSTM softmax output), take argmax
+        if isinstance(raw, np.ndarray) and raw.ndim >= 1 and len(raw) > 1:
+            raw = int(np.argmax(raw))
+
         return EnsembleVoter._normalise_signal(raw)
