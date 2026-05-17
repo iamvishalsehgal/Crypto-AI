@@ -1,12 +1,12 @@
 {
-  "cycle": 5,
-  "timestamp": "2026-05-17T04:39:15.534533+00:00",
+  "cycle": 12,
+  "timestamp": "2026-05-17T06:15:10.946081+00:00",
   "portfolio": {
-    "balance_usd": 21000.0,
-    "equity": 21000.0,
-    "return_pct": 0.0,
-    "open_positions": 0,
-    "unrealized_pnl": 0,
+    "balance_usd": 20001.37,
+    "equity": 20001.37,
+    "return_pct": -4.76,
+    "open_positions": 1,
+    "unrealized_pnl": 0.0,
     "lanes": {
       "crypto": {
         "USDT": {
@@ -17,9 +17,14 @@
       },
       "stock": {
         "USD": {
-          "free": 10000.0,
+          "free": 8999.0,
           "used": 0.0,
-          "total": 10000.0
+          "total": 8999.0
+        },
+        "TSLA": {
+          "free": 2.3689384512660028,
+          "used": 0.0,
+          "total": 2.3689384512660028
         }
       },
       "bet": {
@@ -33,20 +38,31 @@
     "safety_status": {
       "halted": false,
       "halt_reason": "",
-      "daily_fees": 0.0,
+      "daily_fees": 1.0,
       "daily_fee_cap": 50.0,
-      "daily_trades": 0,
-      "hourly_trades": 0,
+      "daily_trades": 1,
+      "hourly_trades": 1,
       "consecutive_losses": 0,
       "peak_equity": 21000.0,
-      "last_trade_times": {}
+      "last_trade_times": {
+        "TSLA": "2026-05-17T06:06:52.050610+00:00"
+      }
     },
-    "positions": []
+    "positions": [
+      {
+        "symbol": "TSLA",
+        "side": "buy",
+        "asset_type": "stock",
+        "entry": 422.1300048828125,
+        "current": 422.1300048828125,
+        "pnl": 0.0
+      }
+    ]
   },
   "pnl": {
-    "total_trades": 0,
+    "total_trades": 1,
     "closed_trades": 0,
-    "open_trades": 0,
+    "open_trades": 1,
     "total_pnl": 0,
     "win_rate_pct": 0.0,
     "avg_win": 0,
@@ -63,6 +79,26 @@
     },
     "ETH/USDT": {
       "symbol": "ETH/USDT",
+      "signal": "PAUSED",
+      "reason": "circuit breaker open"
+    },
+    "stock:AAPL": {
+      "symbol": "AAPL",
+      "signal": "PAUSED",
+      "reason": "circuit breaker open"
+    },
+    "stock:TSLA": {
+      "symbol": "TSLA",
+      "signal": "PAUSED",
+      "reason": "circuit breaker open"
+    },
+    "stock:SPY": {
+      "symbol": "SPY",
+      "signal": "PAUSED",
+      "reason": "circuit breaker open"
+    },
+    "bet:all": {
+      "sport": "all",
       "signal": "PAUSED",
       "reason": "circuit breaker open"
     }
