@@ -1,0 +1,45 @@
+{
+  "timestamp": "2026-05-18T07:05:11.686319+00:00",
+  "health": {
+    "http_status": 200,
+    "overall": "healthy",
+    "timestamp": "2026-05-18T07:05:11.686300+00:00",
+    "lanes": {
+      "total": 3,
+      "active": 3,
+      "degraded": [],
+      "failed": [],
+      "details": {
+        "crypto": "active",
+        "stock": "active",
+        "bet": "active"
+      }
+    },
+    "system": {
+      "cpu_percent": 0.0,
+      "memory_percent": 6.9,
+      "disk_percent": 44.2
+    }
+  },
+  "lanes": {
+    "enabled_lanes": [
+      "crypto",
+      "stock",
+      "bet"
+    ],
+    "active_count": 3,
+    "lane_status": {
+      "crypto": "active",
+      "stock": "active",
+      "bet": "active"
+    },
+    "has_crypto": true,
+    "has_stock": true,
+    "has_bet": true
+  },
+  "retrain_intervals": {
+    "crypto": 7,
+    "stock": 14,
+    "bet": 30
+  }
+}
