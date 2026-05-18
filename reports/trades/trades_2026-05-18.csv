@@ -1,0 +1,2 @@
+timestamp,symbol,side,price,filled_amount,fee,status,pnl,balance_after
+2026-05-18T10:46:39.869684+00:00,TSLA,buy,422.1300048828125,2.3689384512660028,1.0,filled,,21000.0
