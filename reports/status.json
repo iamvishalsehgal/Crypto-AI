@@ -1,6 +1,6 @@
 {
-  "last_updated": "2026-05-19T10:17:46.781495+00:00",
-  "cycle": 3,
+  "last_updated": "2026-05-19T12:27:02.427390+00:00",
+  "cycle": 5,
   "mode": "paper",
   "portfolio": {
     "balance_usd": 21000.0,
@@ -59,31 +59,11 @@
   "last_signals": {
     "BTC/USDT": {
       "symbol": "BTC/USDT",
-      "signal": "ERROR",
-      "reason": "data fetch: bybit GET https://api-testnet.bybit.com/v5/market/instruments-info?category=spot 403 Forbidden {\n     error:The Amazon CloudFront distribution is configured to block access from your country.\n}"
+      "signal": "PAUSED",
+      "reason": "circuit breaker open"
     },
     "ETH/USDT": {
       "symbol": "ETH/USDT",
-      "signal": "PAUSED",
-      "reason": "circuit breaker open"
-    },
-    "stock:AAPL": {
-      "symbol": "AAPL",
-      "signal": "PAUSED",
-      "reason": "circuit breaker open"
-    },
-    "stock:TSLA": {
-      "symbol": "TSLA",
-      "signal": "PAUSED",
-      "reason": "circuit breaker open"
-    },
-    "stock:SPY": {
-      "symbol": "SPY",
-      "signal": "PAUSED",
-      "reason": "circuit breaker open"
-    },
-    "bet:all": {
-      "sport": "all",
       "signal": "PAUSED",
       "reason": "circuit breaker open"
     }
